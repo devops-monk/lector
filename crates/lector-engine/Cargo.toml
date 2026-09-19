@@ -1,0 +1,20 @@
+[package]
+name = "lector-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# The whole reason this app needs no Python. k2-fsa's own Rust binding; its build
+# script downloads a prebuilt static lib (osx-arm64-static-lib.tar.bz2), so this
+# costs no cmake and no C++ compile. espeak-ng and piper_phonemize are inside
+# that archive, which is why there is no phonemizer subprocess either.
+#
+# Pinned exactly: the version is the C++ release it wraps, and a caret bump would
+# silently change the downloaded binary.
+sherpa-onnx = "=1.13.8"
+
+# Playback. cpal rather than rodio: we need sample-accurate scheduling against one
+# clock, a mid-buffer cut for cancellation, and an amplitude tap.
+cpal = "0.15"
+ringbuf = "0.4"
