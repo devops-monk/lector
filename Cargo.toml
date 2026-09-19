@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lector-text", "crates/lector-engine"]
+members = ["crates/lector-text", "crates/lector-engine", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

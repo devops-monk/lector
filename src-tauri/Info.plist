@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- No Dock icon and no menu bar: Lector lives in the status bar only. -->
+  <key>LSUIElement</key>
+  <true/>
+
+  <!-- The second entry point. Right-click selected text in any Cocoa app and
+       macOS hands the text straight to us, with no Accessibility permission and
+       no clipboard round-trip. Same destination as the hotkey. -->
+  <key>NSServices</key>
+  <array>
+    <dict>
+      <key>NSMenuItem</key>
+      <dict>
+        <key>default</key>
+        <string>Speak with Lector</string>
+      </dict>
+      <key>NSMessage</key>
+      <string>speakSelection</string>
+      <key>NSPortName</key>
+      <string>Lector</string>
+      <key>NSSendTypes</key>
+      <array>
+        <string>NSStringPboardType</string>
+        <string>public.utf8-plain-text</string>
+      </array>
+    </dict>
+    <dict>
+      <key>NSMenuItem</key>
+      <dict>
+        <key>default</key>
+        <string>Stop Lector</string>
+      </dict>
+      <key>NSMessage</key>
+      <string>stopSpeaking</string>
+      <key>NSPortName</key>
+      <string>Lector</string>
+      <key>NSSendTypes</key>
+      <array>
+        <string>NSStringPboardType</string>
+        <string>public.utf8-plain-text</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>
