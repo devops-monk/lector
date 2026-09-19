@@ -20,3 +20,9 @@ cpal = "0.15"
 ringbuf = "0.4"
 rubato = "0.16"
 lector-text = { version = "0.1.0", path = "../lector-text" }
+ureq = "2"
+sha2 = "0.11.0"
+tar = "0.4.46"
+bzip2 = "0.6.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"

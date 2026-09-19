@@ -5,6 +5,8 @@
 //! the model, so audio never crosses an IPC boundary -- which matters because
 //! two of the app's surfaces have no window to play it in.
 
+pub mod catalog;
+pub mod install;
 pub mod player;
 pub mod resample;
 pub mod synth;
