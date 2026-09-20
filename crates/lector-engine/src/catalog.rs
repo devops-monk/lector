@@ -40,14 +40,32 @@ pub struct Model {
 /// built it. The model carries 53, most of them Chinese; these are the English
 /// ones, because a wall of names helps nobody choose.
 const KOKORO_EN: &[Speaker] = &[
-    Speaker { name: "af_heart", sid: 3 },
-    Speaker { name: "af_bella", sid: 2 },
-    Speaker { name: "am_michael", sid: 16 },
-    Speaker { name: "bf_emma", sid: 21 },
-    Speaker { name: "bm_george", sid: 26 },
+    Speaker {
+        name: "af_heart",
+        sid: 3,
+    },
+    Speaker {
+        name: "af_bella",
+        sid: 2,
+    },
+    Speaker {
+        name: "am_michael",
+        sid: 16,
+    },
+    Speaker {
+        name: "bf_emma",
+        sid: 21,
+    },
+    Speaker {
+        name: "bm_george",
+        sid: 26,
+    },
 ];
 
-const PIPER_AMY: &[Speaker] = &[Speaker { name: "amy", sid: 0 }];
+const PIPER_AMY: &[Speaker] = &[Speaker {
+    name: "amy",
+    sid: 0,
+}];
 
 /// English-first. The other seven Piper languages verba ships are deliberately
 /// absent: each is a checksum someone has to keep correct, for no value to a

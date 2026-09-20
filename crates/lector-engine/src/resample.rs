@@ -5,7 +5,9 @@
 //! this buffers the ragged chunks the synthesizer produces and drains them in
 //! whole blocks, keeping the remainder for next time.
 
-use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 
 pub struct Resampler2 {
     inner: Option<SincFixedIn<f32>>,
@@ -17,7 +19,12 @@ pub struct Resampler2 {
 impl Resampler2 {
     pub fn new(from: u32, to: u32) -> Self {
         if from == to {
-            return Self { inner: None, block: 0, pending: Vec::new(), out: Vec::new() };
+            return Self {
+                inner: None,
+                block: 0,
+                pending: Vec::new(),
+                out: Vec::new(),
+            };
         }
         let block = 1024;
         let params = SincInterpolationParameters {
@@ -29,7 +36,12 @@ impl Resampler2 {
         };
         let inner = SincFixedIn::<f32>::new(to as f64 / from as f64, 2.0, params, block, 1)
             .expect("resampler construction");
-        Self { inner: Some(inner), block, pending: Vec::new(), out: Vec::new() }
+        Self {
+            inner: Some(inner),
+            block,
+            pending: Vec::new(),
+            out: Vec::new(),
+        }
     }
 
     /// Feeds samples in, returns whatever whole blocks came out.

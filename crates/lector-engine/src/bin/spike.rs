@@ -19,9 +19,9 @@ use std::time::Instant;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-
 use sherpa_onnx::{
-    GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsModelConfig, OfflineTtsVitsModelConfig,
+    GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsModelConfig,
+    OfflineTtsVitsModelConfig,
 };
 
 const MODEL_DIR: &str = "models/vits-piper-en_US-amy-medium-int8";
@@ -34,7 +34,9 @@ fn main() {
     // --cancel proves fact 3: returning false from the callback aborts the
     // utterance mid-flight rather than at the end of the current sentence.
     let cancel_after = args.iter().position(|a| a == "--cancel").map(|i| {
-        args.get(i + 1).and_then(|v| v.parse::<usize>().ok()).unwrap_or(1)
+        args.get(i + 1)
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1)
     });
     let text: String = args
         .iter()
@@ -56,8 +58,14 @@ fn main() {
     // No voices.bin in this directory, so it is a VITS/Piper model rather than
     // Kokoro. That single check is the whole engine discriminator.
     let dir = std::path::Path::new(MODEL_DIR);
-    assert!(dir.join("tokens.txt").exists(), "model not found at {MODEL_DIR}");
-    assert!(!dir.join("voices.bin").exists(), "that's a Kokoro model, not Piper");
+    assert!(
+        dir.join("tokens.txt").exists(),
+        "model not found at {MODEL_DIR}"
+    );
+    assert!(
+        !dir.join("voices.bin").exists(),
+        "that's a Kokoro model, not Piper"
+    );
 
     let t0 = Instant::now();
     let cfg = OfflineTtsConfig {
@@ -78,7 +86,10 @@ fn main() {
     let tts = OfflineTts::create(&cfg).expect("failed to create OfflineTts");
     let load_ms = t0.elapsed().as_secs_f64() * 1000.0;
     let model_rate = tts.sample_rate() as u32;
-    println!("model loaded in {load_ms:.0} ms  |  rate {model_rate} Hz  |  speakers {}", tts.num_speakers());
+    println!(
+        "model loaded in {load_ms:.0} ms  |  rate {model_rate} Hz  |  speakers {}",
+        tts.num_speakers()
+    );
 
     // ---- audio out --------------------------------------------------------
     let host = cpal::default_host();
@@ -86,7 +97,10 @@ fn main() {
     let default_cfg = device.default_output_config().expect("no default config");
     let device_rate = default_cfg.sample_rate().0;
     let channels = default_cfg.channels() as usize;
-    println!("output: {} @ {device_rate} Hz, {channels} ch", device.name().unwrap_or_default());
+    println!(
+        "output: {} @ {device_rate} Hz, {channels} ch",
+        device.name().unwrap_or_default()
+    );
 
     let rb = ringbuf::HeapRb::<f32>::new(device_rate as usize * 30);
     let (mut prod, mut cons) = {
@@ -122,9 +136,11 @@ fn main() {
                         }
                         // Underrun: write silence, never garbage. The stream stays
                         // open for the app's lifetime rather than stopping.
-                        None => for c in 0..channels {
-                            out[f * channels + c] = 0.0;
-                        },
+                        None => {
+                            for c in 0..channels {
+                                out[f * channels + c] = 0.0;
+                            }
+                        }
                     }
                 }
                 if got < frames && got > 0 && generating_cb.load(Ordering::Relaxed) {
@@ -146,8 +162,12 @@ fn main() {
     // floor(n*ratio) per chunk, and a sum of floors is less than floor of the sum.
     let pushed = Arc::new(AtomicUsize::new(0));
 
-    let (fs_cb, ts_cb, cb_cb, push_cb) =
-        (first_sample_at.clone(), total_samples.clone(), callbacks.clone(), pushed.clone());
+    let (fs_cb, ts_cb, cb_cb, push_cb) = (
+        first_sample_at.clone(),
+        total_samples.clone(),
+        callbacks.clone(),
+        pushed.clone(),
+    );
     let t_gen = Instant::now();
     let ratio = device_rate as f64 / model_rate as f64;
 
@@ -196,7 +216,11 @@ fn main() {
         }
     };
 
-    let gen_cfg = GenerationConfig { sid: 0, speed: 1.0, ..Default::default() };
+    let gen_cfg = GenerationConfig {
+        sid: 0,
+        speed: 1.0,
+        ..Default::default()
+    };
     let audio = tts.generate_with_config(&text, &gen_cfg, Some(cb));
     let gen_s = t_gen.elapsed().as_secs_f64();
     generating.store(false, Ordering::Relaxed);
@@ -209,9 +233,15 @@ fn main() {
     println!("\n--- results ---");
     println!("model load          {load_ms:>8.0} ms");
     println!("time to 1st sample  {ttfs:>8.0} ms   <- what the hotkey latency feels like");
-    println!("audio produced      {audio_s:>8.2} s  in {} callbacks", callbacks.load(Ordering::Relaxed));
+    println!(
+        "audio produced      {audio_s:>8.2} s  in {} callbacks",
+        callbacks.load(Ordering::Relaxed)
+    );
     println!("synthesis took      {gen_s:>8.2} s");
-    println!("RTF                 {:>8.2}      (verba measured 0.14 for this voice)", gen_s / audio_s);
+    println!(
+        "RTF                 {:>8.2}      (verba measured 0.14 for this voice)",
+        gen_s / audio_s
+    );
 
     // Drain whatever the hardware has not consumed yet, with a deadline so a
     // silent device can never hang the spike.

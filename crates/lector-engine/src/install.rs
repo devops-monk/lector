@@ -82,7 +82,11 @@ pub fn install(
 ) -> Result<PathBuf, String> {
     let dest = root.join(m.id);
     if is_installed(root, m) {
-        on_progress(Progress { received: 0, total: 0, phase: Phase::Done });
+        on_progress(Progress {
+            received: 0,
+            total: 0,
+            phase: Phase::Done,
+        });
         return Ok(dest);
     }
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
@@ -93,7 +97,11 @@ pub fn install(
     let result = (|| -> Result<(), String> {
         download(&part, m, have, cancel, &mut on_progress)?;
 
-        on_progress(Progress { received: 0, total: 0, phase: Phase::Verifying });
+        on_progress(Progress {
+            received: 0,
+            total: 0,
+            phase: Phase::Verifying,
+        });
         let actual = hash_file(&part)?;
         if actual != m.sha256 {
             return Err(format!(
@@ -102,7 +110,11 @@ pub fn install(
             ));
         }
 
-        on_progress(Progress { received: 0, total: 0, phase: Phase::Unpacking });
+        on_progress(Progress {
+            received: 0,
+            total: 0,
+            phase: Phase::Unpacking,
+        });
         let tmp = tmp_path(root, m);
         let _ = std::fs::remove_dir_all(&tmp);
         unpack(&part, &tmp, cancel)?;
@@ -118,7 +130,11 @@ pub fn install(
         Ok(()) => {
             let _ = std::fs::remove_file(&part);
             let _ = std::fs::remove_dir_all(tmp_path(root, m));
-            on_progress(Progress { received: 0, total: 0, phase: Phase::Done });
+            on_progress(Progress {
+                received: 0,
+                total: 0,
+                phase: Phase::Done,
+            });
             Ok(dest)
         }
         Err(e) => {
@@ -143,11 +159,21 @@ fn download(
 
     // 206 means the server honoured the range; anything else means start over.
     let resuming = resp.status() == 206 && resume_from > 0;
-    let declared: u64 = resp.header("Content-Length").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let total = if resuming { resume_from + declared } else { declared };
+    let declared: u64 = resp
+        .header("Content-Length")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let total = if resuming {
+        resume_from + declared
+    } else {
+        declared
+    };
 
     let mut file = if resuming {
-        std::fs::OpenOptions::new().append(true).open(part).map_err(|e| e.to_string())?
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(part)
+            .map_err(|e| e.to_string())?
     } else {
         std::fs::File::create(part).map_err(|e| e.to_string())?
     };
@@ -171,11 +197,19 @@ fn download(
         received += n as u64;
         if received >= next_report {
             next_report = received + step;
-            on_progress(Progress { received, total, phase: Phase::Downloading });
+            on_progress(Progress {
+                received,
+                total,
+                phase: Phase::Downloading,
+            });
         }
     }
     file.flush().map_err(|e| e.to_string())?;
-    on_progress(Progress { received, total, phase: Phase::Downloading });
+    on_progress(Progress {
+        received,
+        total,
+        phase: Phase::Downloading,
+    });
     Ok(())
 }
 
@@ -190,7 +224,11 @@ fn hash_file(path: &Path) -> Result<String, String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 /// Unpacks into `dest`, stripping the archive's own top-level directory.
@@ -207,10 +245,15 @@ fn unpack(archive: &Path, dest: &Path, cancel: &Cancel) -> Result<(), String> {
         let path = entry.path().map_err(|e| e.to_string())?.into_owned();
 
         // Zip-slip: an archive must never write outside the directory we chose.
-        if path.components().any(|c| matches!(c, std::path::Component::ParentDir))
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
             || path.is_absolute()
         {
-            return Err(format!("archive contains an unsafe path: {}", path.display()));
+            return Err(format!(
+                "archive contains an unsafe path: {}",
+                path.display()
+            ));
         }
 
         // Strip the leading component, which is the archive's own name.

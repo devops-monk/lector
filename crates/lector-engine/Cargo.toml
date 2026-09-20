@@ -19,7 +19,9 @@ sherpa-onnx = "=1.13.8"
 cpal = "0.15"
 ringbuf = "0.4"
 rubato = "0.16"
-lector-text = { version = "0.1.0", path = "../lector-text" }
+# No version requirement: these crates are versioned together by the workspace,
+# and pinning one here means every release bump breaks the other.
+lector-text = { path = "../lector-text" }
 ureq = "2"
 sha2 = "0.11.0"
 tar = "0.4.46"

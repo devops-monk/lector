@@ -15,7 +15,10 @@ fn main() {
 
     let t0 = Instant::now();
     let lector = Lector::new(std::path::Path::new(MODEL)).expect("engine");
-    println!("engine ready in {} ms (device open + model warm)\n", t0.elapsed().as_millis());
+    println!(
+        "engine ready in {} ms (device open + model warm)\n",
+        t0.elapsed().as_millis()
+    );
 
     if !arg.is_empty() {
         lector.speak(&arg.join(" "), SanitizeOptions::NARRATION, true);
@@ -43,7 +46,10 @@ fn main() {
     let t = Instant::now();
     lector.speak("Interrupted.", SanitizeOptions::NARRATION, true);
     std::thread::sleep(Duration::from_millis(50));
-    println!("  new utterance accepted after {} ms", t.elapsed().as_millis());
+    println!(
+        "  new utterance accepted after {} ms",
+        t.elapsed().as_millis()
+    );
     wait_until_quiet(&lector);
 
     // 3. Stop: silence must be immediate, not at the end of the sentence.

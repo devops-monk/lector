@@ -85,7 +85,9 @@ fn model_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     candidates.push(std::path::PathBuf::from("models").join(VOICE));
     candidates.push(std::path::PathBuf::from("../models").join(VOICE));
 
-    candidates.into_iter().find(|p| p.join("tokens.txt").exists())
+    candidates
+        .into_iter()
+        .find(|p| p.join("tokens.txt").exists())
 }
 
 #[tauri::command]
@@ -101,7 +103,9 @@ fn stop_speaking(state: State<Arc<App>>) {
 }
 
 fn main() {
-    let app_state = Arc::new(App { lector: Mutex::new(None) });
+    let app_state = Arc::new(App {
+        lector: Mutex::new(None),
+    });
     let hotkey_state = app_state.clone();
 
     tauri::Builder::default()
@@ -123,12 +127,14 @@ fn main() {
         .setup(move |app| {
             // Loading blocks for ~1s (audio device + model warm). Doing it here
             // rather than on first hotkey means the first press is instant.
-            match model_dir(&app.handle()) {
+            match model_dir(app.handle()) {
                 Some(dir) => match Lector::new(&dir) {
                     Ok(l) => *app_state.lector.lock().unwrap() = Some(l),
                     Err(e) => eprintln!("lector: engine failed to start: {e}"),
                 },
-                None => eprintln!("lector: no voice found; expected models/vits-piper-en_US-amy-medium-int8"),
+                None => eprintln!(
+                    "lector: no voice found; expected models/vits-piper-en_US-amy-medium-int8"
+                ),
             }
 
             app.global_shortcut().register(hotkey())?;
@@ -148,7 +154,13 @@ fn main() {
 }
 
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let speak = MenuItem::with_id(app, "speak", "Speak Selection", true, Some("Alt+Shift+Space"))?;
+    let speak = MenuItem::with_id(
+        app,
+        "speak",
+        "Speak Selection",
+        true,
+        Some("Alt+Shift+Space"),
+    )?;
     let stop = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Lector", true, Some("Cmd+Q"))?;
     let menu = Menu::with_items(

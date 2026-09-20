@@ -7,7 +7,9 @@
 pub mod chunk;
 pub mod sanitize;
 
-pub use chunk::{pack_chunks, split_sentences, MAX_CHUNK_CHARS, MIN_CHUNK_CHARS, TARGET_CHUNK_CHARS};
+pub use chunk::{
+    pack_chunks, split_sentences, MAX_CHUNK_CHARS, MIN_CHUNK_CHARS, TARGET_CHUNK_CHARS,
+};
 pub use sanitize::{is_speakable, sanitize, SanitizeOptions};
 
 /// The whole pipeline: raw text to the chunks a synthesizer will be handed.

@@ -106,7 +106,9 @@ impl Player {
                     }
                     let _ = got;
                     cb_state.frames_played.fetch_add(frames, Ordering::Relaxed);
-                    cb_state.level.store(peak.to_bits() as u64, Ordering::Relaxed);
+                    cb_state
+                        .level
+                        .store(peak.to_bits() as u64, Ordering::Relaxed);
                 },
                 |e| eprintln!("lector: audio stream error: {e}"),
                 None,
@@ -115,7 +117,12 @@ impl Player {
 
         stream.play().map_err(|e| e.to_string())?;
 
-        Ok(Self { _stream: stream, prod, state, device_rate })
+        Ok(Self {
+            _stream: stream,
+            prod,
+            state,
+            device_rate,
+        })
     }
 
     /// Queues mono samples already at the device rate.

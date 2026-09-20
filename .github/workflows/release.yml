@@ -1,0 +1,93 @@
+name: Release
+
+# Tag a version to cut a release:
+#   ./scripts/release.sh 0.2.0
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build (must already exist)
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bundle:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: target/sherpa-onnx-prebuilt
+
+      - name: Check the tag matches the version in Cargo.toml
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          [ -n "${{ github.event.inputs.tag }}" ] && tag="${{ github.event.inputs.tag }}" && tag="${tag#v}"
+          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "$tag" != "$crate" ]; then
+            echo "tag $tag does not match workspace version $crate" >&2
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_ENV"
+
+      - run: cargo test --workspace
+
+      - name: Bundle the app
+        run: |
+          cargo install tauri-cli --version '^2' --locked
+          cargo tauri build --bundles app,dmg
+
+      # A release that has never been launched is a release nobody has tested.
+      # This will not click the hotkey, but it does catch a bundle that cannot
+      # even start -- a missing dylib, a bad Info.plist, an unsigned binary
+      # Gatekeeper refuses outright.
+      - name: Smoke-test the bundle
+        run: |
+          app=target/release/bundle/macos/Lector.app
+          test -d "$app" || { echo "no app bundle produced" >&2; exit 1; }
+          plutil -lint "$app/Contents/Info.plist"
+          open "$app"
+          sleep 12
+          pgrep -f 'Lector.app/Contents/MacOS' >/dev/null \
+            || { echo "the bundle exited within 12s of launching" >&2; exit 1; }
+          pkill -f 'Lector.app/Contents/MacOS' || true
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist-release
+          cp target/release/bundle/dmg/*.dmg "dist-release/Lector-${{ env.version }}-macos-arm64.dmg"
+          ditto -c -k --keepParent target/release/bundle/macos/Lector.app \
+            "dist-release/Lector-${{ env.version }}-macos-arm64.app.zip"
+          cd dist-release && shasum -a 256 * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lector-macos-arm64
+          path: dist-release/*
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: dist-release/*
+          body: |
+            Local-only text to speech for macOS (Apple silicon).
+
+            **Unsigned.** macOS will refuse to open it on first launch: right-click
+            the app and choose Open, or run
+            `xattr -dr com.apple.quarantine /Applications/Lector.app`.
+
+            Lector needs Accessibility permission to read the selected text.

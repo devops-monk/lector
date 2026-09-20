@@ -32,7 +32,11 @@ impl Lector {
     pub fn new(model_dir: &Path) -> Result<Self, String> {
         let voice = Voice::from_dir(model_dir, 0)?;
         let handle = synth::spawn(voice.clone())?;
-        Ok(Self { handle, voice, speed: 1.0 })
+        Ok(Self {
+            handle,
+            voice,
+            speed: 1.0,
+        })
     }
 
     pub fn set_speed(&mut self, speed: f32) {

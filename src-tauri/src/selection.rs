@@ -115,17 +115,29 @@ pub fn selected_text() -> Result<String, String> {
 fn press_copy() -> Result<(), String> {
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("{e}. Lector needs Accessibility permission."))?;
-    enigo.key(Key::Meta, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Unicode('c'), Direction::Click).map_err(|e| e.to_string())?;
-    enigo.key(Key::Meta, Direction::Release).map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Meta, Direction::Press)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Unicode('c'), Direction::Click)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Meta, Direction::Release)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
 fn press_copy() -> Result<(), String> {
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
-    enigo.key(Key::Control, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Unicode('c'), Direction::Click).map_err(|e| e.to_string())?;
-    enigo.key(Key::Control, Direction::Release).map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Control, Direction::Press)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Unicode('c'), Direction::Click)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Control, Direction::Release)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }

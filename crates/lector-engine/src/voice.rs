@@ -29,7 +29,11 @@ pub struct Voice {
 impl Voice {
     /// Reads a model directory and works out what it contains.
     pub fn from_dir(dir: &Path, sid: i32) -> Result<Self, String> {
-        let id = dir.file_name().and_then(|s| s.to_str()).unwrap_or("model").to_string();
+        let id = dir
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("model")
+            .to_string();
         let tokens = dir.join("tokens.txt");
         if !tokens.exists() {
             return Err(format!("{}: no tokens.txt", dir.display()));
@@ -44,7 +48,11 @@ impl Voice {
             .find(|p| p.extension().is_some_and(|x| x == "onnx"))
             .ok_or_else(|| format!("{}: no .onnx model", dir.display()))?;
 
-        let engine = if voices_bin.exists() { Engine::Kokoro } else { Engine::Piper };
+        let engine = if voices_bin.exists() {
+            Engine::Kokoro
+        } else {
+            Engine::Piper
+        };
 
         Ok(Self {
             id,
@@ -53,7 +61,9 @@ impl Voice {
             model_file: onnx.to_string_lossy().into_owned(),
             tokens: tokens.to_string_lossy().into_owned(),
             data_dir: data_dir.to_string_lossy().into_owned(),
-            voices_bin: voices_bin.exists().then(|| voices_bin.to_string_lossy().into_owned()),
+            voices_bin: voices_bin
+                .exists()
+                .then(|| voices_bin.to_string_lossy().into_owned()),
         })
     }
 }

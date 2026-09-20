@@ -42,7 +42,12 @@ const SILENCE_FLOOR: f32 = 0.005;
 const FADE_MS: f32 = 10.0;
 
 pub enum Command {
-    Speak { generation: u64, voice: Voice, chunks: Vec<String>, speed: f32 },
+    Speak {
+        generation: u64,
+        voice: Voice,
+        chunks: Vec<String>,
+        speed: f32,
+    },
     Stop,
     Shutdown,
 }
@@ -59,7 +64,12 @@ impl Handle {
     pub fn speak(&self, voice: Voice, chunks: Vec<String>, speed: f32) {
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         self.state.request_flush();
-        let _ = self.tx.send(Command::Speak { generation, voice, chunks, speed });
+        let _ = self.tx.send(Command::Speak {
+            generation,
+            voice,
+            chunks,
+            speed,
+        });
     }
 
     pub fn stop(&self) {
@@ -106,7 +116,12 @@ pub fn spawn(voice: Voice) -> Result<Handle, String> {
         .map_err(|e| e.to_string())?;
 
     let state = ready_rx.recv().map_err(|e| e.to_string())??;
-    Ok(Handle { tx, generation, speaking, state })
+    Ok(Handle {
+        tx,
+        generation,
+        speaking,
+        state,
+    })
 }
 
 /// Player and resampler together, behind a handle the model's callback can also
@@ -148,7 +163,11 @@ struct Actor {
 }
 
 impl Actor {
-    fn new(voice: Voice, generation: Arc<AtomicU64>, speaking: Arc<AtomicBool>) -> Result<Self, String> {
+    fn new(
+        voice: Voice,
+        generation: Arc<AtomicU64>,
+        speaking: Arc<AtomicBool>,
+    ) -> Result<Self, String> {
         let player = Player::new()?;
         let tts = load(&voice)?;
         let resampler = Resampler2::new(tts.sample_rate() as u32, player.device_rate);
@@ -156,7 +175,15 @@ impl Actor {
         let device_rate = player.device_rate;
         let out = Rc::new(RefCell::new(Output { player, resampler }));
 
-        let mut actor = Self { tts, voice, out, device_rate, state, generation, speaking };
+        let mut actor = Self {
+            tts,
+            voice,
+            out,
+            device_rate,
+            state,
+            generation,
+            speaking,
+        };
         actor.warm();
         Ok(actor)
     }
@@ -164,8 +191,14 @@ impl Actor {
     /// One tiny synthesis at startup so the first real request is not the one
     /// that pays for lazy initialisation inside the model.
     fn warm(&mut self) {
-        let cfg = GenerationConfig { sid: self.voice.sid, speed: 1.0, ..Default::default() };
-        let _ = self.tts.generate_with_config("Ready.", &cfg, None::<fn(&[f32], f32) -> bool>);
+        let cfg = GenerationConfig {
+            sid: self.voice.sid,
+            speed: 1.0,
+            ..Default::default()
+        };
+        let _ = self
+            .tts
+            .generate_with_config("Ready.", &cfg, None::<fn(&[f32], f32) -> bool>);
     }
 
     fn run(&mut self, rx: Receiver<Command>) {
@@ -176,7 +209,12 @@ impl Actor {
                     self.out.borrow_mut().resampler.reset();
                     self.speaking.store(false, Ordering::Relaxed);
                 }
-                Command::Speak { generation, voice, chunks, speed } => {
+                Command::Speak {
+                    generation,
+                    voice,
+                    chunks,
+                    speed,
+                } => {
                     if generation < self.generation.load(Ordering::Acquire) {
                         continue; // superseded before we even started
                     }
@@ -236,18 +274,26 @@ impl Actor {
             current.load(Ordering::Acquire) == generation
         };
 
-        let cfg = GenerationConfig { sid: self.voice.sid, speed, ..Default::default() };
+        let cfg = GenerationConfig {
+            sid: self.voice.sid,
+            speed,
+            ..Default::default()
+        };
         let _ = self.tts.generate_with_config(text, &cfg, Some(cb));
 
         let tail: Vec<f32> = self.out.borrow_mut().resampler.flush().to_vec();
-        self.out.borrow_mut().push_all(&tail, generation, &self.generation);
+        self.out
+            .borrow_mut()
+            .push_all(&tail, generation, &self.generation);
     }
 
     fn push_silence(&mut self, d: Duration) {
         let n = (self.device_rate as f64 * d.as_secs_f64()) as usize;
         let silence = vec![0.0f32; n];
         let gen = self.generation.load(Ordering::Acquire);
-        self.out.borrow_mut().push_all(&silence, gen, &self.generation);
+        self.out
+            .borrow_mut()
+            .push_all(&silence, gen, &self.generation);
     }
 }
 
@@ -257,8 +303,15 @@ impl Actor {
 /// long dead air between sentences. We cut it and insert our own gap instead.
 /// The fade matters: cutting mid-waveform without one is an audible click.
 fn trim_and_fade(samples: &[f32], rate: u32) -> Vec<f32> {
-    let start = samples.iter().position(|s| s.abs() > SILENCE_FLOOR).unwrap_or(0);
-    let end = samples.iter().rposition(|s| s.abs() > SILENCE_FLOOR).map(|i| i + 1).unwrap_or(samples.len());
+    let start = samples
+        .iter()
+        .position(|s| s.abs() > SILENCE_FLOOR)
+        .unwrap_or(0);
+    let end = samples
+        .iter()
+        .rposition(|s| s.abs() > SILENCE_FLOOR)
+        .map(|i| i + 1)
+        .unwrap_or(samples.len());
     if start >= end {
         return Vec::new();
     }
@@ -318,8 +371,15 @@ fn load(voice: &Voice) -> Result<OfflineTts, String> {
             ..Default::default()
         },
     };
-    let cfg = OfflineTtsConfig { model, ..Default::default() };
+    let cfg = OfflineTtsConfig {
+        model,
+        ..Default::default()
+    };
     let tts = OfflineTts::create(&cfg).ok_or_else(|| format!("could not load {}", voice.id))?;
-    eprintln!("lector: loaded {} in {} ms", voice.id, t0.elapsed().as_millis());
+    eprintln!(
+        "lector: loaded {} in {} ms",
+        voice.id,
+        t0.elapsed().as_millis()
+    );
     Ok(tts)
 }

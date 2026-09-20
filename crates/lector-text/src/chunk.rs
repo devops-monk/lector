@@ -12,8 +12,8 @@
 //! So: every chunk after the first honours the floor; the **first chunk of an
 //! utterance ignores it** and goes out as one sentence, however short.
 
-use icu_segmenter::SentenceSegmenter;
 use icu_segmenter::options::SentenceBreakInvariantOptions;
+use icu_segmenter::SentenceSegmenter;
 
 /// Sentences shorter than this are merged into the next one -- except the first.
 pub const MIN_CHUNK_CHARS: usize = 100;
@@ -27,14 +27,16 @@ pub const MAX_CHUNK_CHARS: usize = 800;
 /// ICU's sentence break handles much of this, but not domain terms. Kept small
 /// and English-first on purpose; every entry is a rule someone must maintain.
 const ABBREVIATIONS: &[&str] = &[
-    "dr", "mr", "mrs", "ms", "prof", "sr", "jr", "st", "vs", "etc", "e.g", "i.e",
-    "inc", "ltd", "fig", "no", "approx", "al", "ca", "cf",
-    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+    "dr", "mr", "mrs", "ms", "prof", "sr", "jr", "st", "vs", "etc", "e.g", "i.e", "inc", "ltd",
+    "fig", "no", "approx", "al", "ca", "cf", "jan", "feb", "mar", "apr", "jun", "jul", "aug",
+    "sep", "sept", "oct", "nov", "dec",
 ];
 
 fn ends_with_abbreviation(s: &str) -> bool {
     let t = s.trim_end();
-    let Some(stripped) = t.strip_suffix('.') else { return false };
+    let Some(stripped) = t.strip_suffix('.') else {
+        return false;
+    };
     let last: String = stripped
         .chars()
         .rev()
@@ -53,7 +55,11 @@ fn ends_with_abbreviation(s: &str) -> bool {
     }
     // A decimal point: "3.14".
     stripped.chars().last().is_some_and(|c| c.is_ascii_digit())
-        && stripped.chars().rev().nth(1).is_some_and(|c| c.is_ascii_digit())
+        && stripped
+            .chars()
+            .rev()
+            .nth(1)
+            .is_some_and(|c| c.is_ascii_digit())
 }
 
 /// Splits text into sentences using the Unicode sentence-break algorithm, then
@@ -83,7 +89,10 @@ pub fn split_sentences(text: &str) -> Vec<String> {
             }
         }
     }
-    out.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    out.into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// Packs sentences into chunks for synthesis.
@@ -138,7 +147,11 @@ fn hard_split(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = s;
     while rest.chars().count() > MAX_CHUNK_CHARS {
-        let budget: usize = rest.char_indices().nth(MAX_CHUNK_CHARS).map(|(i, _)| i).unwrap_or(rest.len());
+        let budget: usize = rest
+            .char_indices()
+            .nth(MAX_CHUNK_CHARS)
+            .map(|(i, _)| i)
+            .unwrap_or(rest.len());
         // Only cut at a space if one exists reasonably deep into the budget;
         // otherwise a pathological run of non-spaces would emit slivers.
         let cut = rest[..budget]

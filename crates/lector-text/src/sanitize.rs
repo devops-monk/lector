@@ -24,12 +24,24 @@ pub struct SanitizeOptions {
 impl SanitizeOptions {
     /// Narrating an agent: every rule on. Unreadable constructs are frequent and
     /// the listener wants the gist, not the characters.
-    pub const NARRATION: Self = Self { announce_code: true, omit_tables: true, shorten_paths: true };
+    pub const NARRATION: Self = Self {
+        announce_code: true,
+        omit_tables: true,
+        shorten_paths: true,
+    };
     /// Long-form reading: decline tables, but a prose document's code and links
     /// are usually worth hearing.
-    pub const READING: Self = Self { announce_code: true, omit_tables: true, shorten_paths: false };
+    pub const READING: Self = Self {
+        announce_code: true,
+        omit_tables: true,
+        shorten_paths: false,
+    };
     /// A script someone wrote to be spoken. Strip markup, change nothing else.
-    pub const VERBATIM: Self = Self { announce_code: false, omit_tables: false, shorten_paths: false };
+    pub const VERBATIM: Self = Self {
+        announce_code: false,
+        omit_tables: false,
+        shorten_paths: false,
+    };
 }
 
 impl Default for SanitizeOptions {
@@ -180,7 +192,11 @@ fn sanitize_line(line: &str, opts: SanitizeOptions) -> String {
 
     // Horizontal rules are silent.
     let bare: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
-    if bare.len() >= 3 && (bare.chars().all(|c| c == '-') || bare.chars().all(|c| c == '*') || bare.chars().all(|c| c == '_')) {
+    if bare.len() >= 3
+        && (bare.chars().all(|c| c == '-')
+            || bare.chars().all(|c| c == '*')
+            || bare.chars().all(|c| c == '_'))
+    {
         return String::new();
     }
 
@@ -204,7 +220,9 @@ fn sanitize_line(line: &str, opts: SanitizeOptions) -> String {
 /// Strips `#`, `>`, `-`, `*`, `+` and `1.` style line markers.
 fn strip_leading_marker(line: &str) -> Option<String> {
     let t = line.trim_start();
-    for p in ["###### ", "##### ", "#### ", "### ", "## ", "# ", "> ", "- ", "* ", "+ "] {
+    for p in [
+        "###### ", "##### ", "#### ", "### ", "## ", "# ", "> ", "- ", "* ", "+ ",
+    ] {
         if let Some(rest) = t.strip_prefix(p) {
             return Some(rest.to_string());
         }
@@ -285,10 +303,20 @@ fn shorten_urls_and_paths(s: &str) -> String {
     s.split_whitespace()
         .map(|tok| {
             let (lead, core, trail) = split_punct(tok);
-            let short = if let Some(rest) = core.strip_prefix("https://").or_else(|| core.strip_prefix("http://")) {
-                rest.split('/').next().unwrap_or(rest).trim_start_matches("www.").to_string()
+            let short = if let Some(rest) = core
+                .strip_prefix("https://")
+                .or_else(|| core.strip_prefix("http://"))
+            {
+                rest.split('/')
+                    .next()
+                    .unwrap_or(rest)
+                    .trim_start_matches("www.")
+                    .to_string()
             } else if core.contains('/') && !core.contains(' ') && core.len() > 1 {
-                core.rsplit('/').find(|p| !p.is_empty()).unwrap_or(core).to_string()
+                core.rsplit('/')
+                    .find(|p| !p.is_empty())
+                    .unwrap_or(core)
+                    .to_string()
             } else {
                 core.to_string()
             };
@@ -302,7 +330,9 @@ fn shorten_urls_and_paths(s: &str) -> String {
 /// swallow the full stop that ends the sentence.
 fn split_punct(tok: &str) -> (&str, &str, &str) {
     let start = tok.len() - tok.trim_start_matches(['(', '[', '"', '\'']).len();
-    let end = tok.trim_end_matches([')', ']', '"', '\'', '.', ',', ';', ':', '!', '?']).len();
+    let end = tok
+        .trim_end_matches([')', ']', '"', '\'', '.', ',', ';', ':', '!', '?'])
+        .len();
     if end <= start {
         return ("", tok, "");
     }
