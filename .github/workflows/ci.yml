@@ -18,7 +18,7 @@ jobs:
   # Style and lint once, on the platform Lector is actually developed on.
   # Running them four times would just be the same answer, slower.
   lint:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -37,10 +37,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             slug: macos-arm64
-          - os: macos-13
+          # Intel macOS is cross-compiled from the Apple silicon runner rather
+          # than built on an Intel one: macos-13 has been retired and the
+          # remaining x64 images are larger runners. Cross-compiling needs no
+          # scarce runner, but it does mean the result is built and never run,
+          # so this job builds without testing.
+          - os: macos-15
             slug: macos-x64
+            target: x86_64-apple-darwin
           - os: windows-latest
             slug: windows-x64
           - os: ubuntu-22.04
@@ -62,15 +68,29 @@ jobs:
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
             patchelf libxdo-dev libasound2-dev build-essential file
 
-      # The default set is offline and fast.
-      - run: cargo test --workspace
+      - name: Add cross-compilation target
+        if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
 
-      - run: cargo build --workspace --release
+      # The default set is offline and fast. Skipped when cross-compiling, since
+      # the binaries cannot run on this host.
+      - name: Test
+        if: matrix.target == ''
+        run: cargo test --workspace
+
+      - name: Build
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --workspace --release --target ${{ matrix.target }}
+          else
+            cargo build --workspace --release
+          fi
+        shell: bash
 
   # The network tests really download models, so they run once and separately:
   # a GitHub outage should not fail the fast job on four platforms at once.
   models:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

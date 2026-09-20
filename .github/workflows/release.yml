@@ -44,12 +44,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14          # Apple silicon
+          - os: macos-15          # Apple silicon
             slug: macos-arm64
             bundles: app,dmg
-          - os: macos-13          # Intel
+          # Intel macOS is cross-compiled from the Apple silicon runner: the
+          # free Intel image (macos-13) has been retired, and cross-compiling
+          # costs nothing and waits for no runner. It cannot be smoke-tested
+          # here, which the release notes say out loud.
+          - os: macos-15          # Intel, cross-compiled
             slug: macos-x64
             bundles: app,dmg
+            target: x86_64-apple-darwin
           - os: windows-latest
             slug: windows-x64
             bundles: nsis,msi
@@ -78,19 +83,32 @@ jobs:
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
             patchelf libxdo-dev libasound2-dev build-essential file
 
-      - run: cargo test --workspace
+      - name: Add cross-compilation target
+        if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Test
+        if: matrix.target == ''
+        run: cargo test --workspace
 
       - name: Bundle
+        shell: bash
         run: |
           cargo install tauri-cli --version '^2' --locked
-          cargo tauri build --bundles ${{ matrix.bundles }}
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo tauri build --bundles ${{ matrix.bundles }} --target ${{ matrix.target }}
+            echo "BUNDLE_DIR=target/${{ matrix.target }}/release/bundle" >> "$GITHUB_ENV"
+          else
+            cargo tauri build --bundles ${{ matrix.bundles }}
+            echo "BUNDLE_DIR=target/release/bundle" >> "$GITHUB_ENV"
+          fi
 
       # A release nobody has launched is a release nobody has tested. This will
       # not press the hotkey, but it catches a bundle that cannot start at all.
       - name: Smoke-test the bundle (macOS)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.target == ''
         run: |
-          app=target/release/bundle/macos/Lector.app
+          app=$BUNDLE_DIR/macos/Lector.app
           test -d "$app" || { echo "no app bundle produced" >&2; exit 1; }
           plutil -lint "$app/Contents/Info.plist"
           open "$app"
@@ -103,11 +121,12 @@ jobs:
       # launched there. Checking the binary links and runs at all is the most
       # these platforms can honestly assert.
       - name: Smoke-test the binary (Windows/Linux)
-        if: runner.os != 'macOS'
+        if: runner.os != 'macOS' || matrix.target != ''
         shell: bash
         run: |
-          bin=target/release/lector
-          [ "${RUNNER_OS}" = "Windows" ] && bin=target/release/lector.exe
+          base="${BUNDLE_DIR%/bundle}"
+          bin="$base/lector"
+          [ "${RUNNER_OS}" = "Windows" ] && bin="$base/lector.exe"
           test -f "$bin" || { echo "no binary produced" >&2; exit 1; }
           ls -l "$bin"
 
@@ -120,15 +139,15 @@ jobs:
           shopt -s nullglob
           # Each platform produces its own extensions, so naming by extension is
           # unambiguous and keeps the release page readable.
-          for f in target/release/bundle/dmg/*.dmg \
-                   target/release/bundle/nsis/*.exe \
-                   target/release/bundle/msi/*.msi \
-                   target/release/bundle/deb/*.deb \
-                   target/release/bundle/appimage/*.AppImage; do
+          for f in "$BUNDLE_DIR"/dmg/*.dmg \
+                   "$BUNDLE_DIR"/nsis/*.exe \
+                   "$BUNDLE_DIR"/msi/*.msi \
+                   "$BUNDLE_DIR"/deb/*.deb \
+                   "$BUNDLE_DIR"/appimage/*.AppImage; do
             cp "$f" "dist-release/Lector-$v-$s.${f##*.}"
           done
           if [ "${RUNNER_OS}" = "macOS" ]; then
-            ditto -c -k --keepParent target/release/bundle/macos/Lector.app \
+            ditto -c -k --keepParent "$BUNDLE_DIR"/macos/Lector.app \
               "dist-release/Lector-$v-$s.app.zip"
           fi
           ls -l dist-release
