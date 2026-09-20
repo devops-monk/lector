@@ -9,7 +9,9 @@ description = "Local-only text to speech"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+# image-png: the menu bar icon is loaded from a PNG at runtime rather than
+# reusing the bundle icon, which is a colour icon and wrong for a menu bar.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-global-shortcut = "2"
 lector-engine = { path = "../crates/lector-engine" }
 lector-text = { path = "../crates/lector-text" }

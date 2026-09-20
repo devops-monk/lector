@@ -142,6 +142,18 @@ impl App {
         }
     }
 
+    fn set_speed(&self, app: &AppHandle, speed: f32) {
+        {
+            let mut s = self.settings.lock().unwrap();
+            s.speed = speed;
+            s.save(&self.data_dir);
+        }
+        if let Some(l) = self.lector.lock().unwrap().as_mut() {
+            l.set_speed(speed);
+        }
+        rebuild_menu(app);
+    }
+
     fn select_voice(&self, app: &AppHandle, model_id: &str, sid: i32) {
         {
             let mut s = self.settings.lock().unwrap();
@@ -275,20 +287,66 @@ fn main() {
         .expect("error while running lector");
 }
 
+/// The speeds worth offering. Kept short: a slider in a menu is a fiddle, and
+/// nobody wants eleven options.
+const SPEEDS: &[(f32, &str)] = &[
+    (0.8, "Slower"),
+    (1.0, "Normal"),
+    (1.25, "Faster"),
+    (1.5, "Fast"),
+    (2.0, "Very fast"),
+];
+
 /// Builds the tray menu from the catalog and what is actually on disk.
 fn menu_for(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let state = app.state::<Arc<App>>();
     let chosen = state.settings.lock().unwrap().clone();
     let installing = state.installing.lock().unwrap().clone();
+    let ready = state.lector.lock().unwrap().is_some();
+    let speaking = state
+        .lector
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|l| l.is_speaking());
 
-    let speak = MenuItem::with_id(
+    let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
+
+    // The first line is a status line, not an action. With no window this is the
+    // only place the app can say what it is doing or why it is not working.
+    if !selection::has_accessibility(false) {
+        items.push(Box::new(MenuItem::with_id(
+            app,
+            "accessibility",
+            "Grant Accessibility permission…",
+            true,
+            None::<&str>,
+        )?));
+        items.push(Box::new(PredefinedMenuItem::separator(app)?));
+    } else if !ready {
+        items.push(Box::new(MenuItem::with_id(
+            app,
+            "novoice",
+            "No voice installed — choose one below",
+            false,
+            None::<&str>,
+        )?));
+        items.push(Box::new(PredefinedMenuItem::separator(app)?));
+    }
+
+    // One item that changes verb, rather than two where one is always dead.
+    items.push(Box::new(MenuItem::with_id(
         app,
-        "speak",
-        "Speak Selection",
-        true,
+        "toggle",
+        if speaking {
+            "Stop Speaking"
+        } else {
+            "Speak Selection"
+        },
+        ready,
         Some("Alt+Shift+Space"),
-    )?;
-    let stop = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
+    )?));
+    items.push(Box::new(PredefinedMenuItem::separator(app)?));
 
     let voices = Submenu::new(app, "Voice", true)?;
     for m in catalog::CATALOG {
@@ -305,7 +363,7 @@ fn menu_for(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             voices.append(&MenuItem::with_id(
                 app,
                 format!("install:{}", m.id),
-                format!("Download {} ({} MB) — {}", m.label, m.mb, m.tradeoff),
+                format!("Download {} ({} MB)", m.label, m.mb),
                 true,
                 None::<&str>,
             )?)?;
@@ -330,19 +388,33 @@ fn menu_for(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             }
         }
     }
+    items.push(Box::new(voices));
 
-    let quit = MenuItem::with_id(app, "quit", "Quit Lector", true, Some("Cmd+Q"))?;
-    Menu::with_items(
+    let speed = Submenu::new(app, "Speed", ready)?;
+    for (v, label) in SPEEDS {
+        speed.append(&CheckMenuItem::with_id(
+            app,
+            format!("speed:{v}"),
+            format!("{label}  ({v}x)"),
+            true,
+            (chosen.speed - v).abs() < 0.01,
+            None::<&str>,
+        )?)?;
+    }
+    items.push(Box::new(speed));
+
+    items.push(Box::new(PredefinedMenuItem::separator(app)?));
+    items.push(Box::new(MenuItem::with_id(
         app,
-        &[
-            &speak,
-            &stop,
-            &PredefinedMenuItem::separator(app)?,
-            &voices,
-            &PredefinedMenuItem::separator(app)?,
-            &quit,
-        ],
-    )
+        "quit",
+        "Quit Lector",
+        true,
+        Some("Cmd+Q"),
+    )?));
+
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+        items.iter().map(|b| b.as_ref()).collect();
+    Menu::with_items(app, &refs)
 }
 
 fn rebuild_menu(app: &AppHandle) {
@@ -354,14 +426,18 @@ fn rebuild_menu(app: &AppHandle) {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    // A template image -- black plus alpha -- so macOS tints it for light and
+    // dark menu bars. The bundle icon is a colour icon and would look wrong here.
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/trayTemplate@2x.png"))
+        .expect("tray icon");
+
     TrayIconBuilder::with_id("lector")
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(icon)
         .icon_as_template(true)
         .tooltip("Lector")
         .menu(&menu_for(app)?)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| {
-            let state = app.state::<Arc<App>>().inner().clone();
             let id = event.id().as_ref().to_string();
 
             if let Some(model_id) = id.strip_prefix("install:") {
@@ -382,11 +458,30 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
                 return;
             }
-            match id.as_str() {
-                "speak" => {
-                    std::thread::spawn(move || state.toggle());
+            if let Some(v) = id.strip_prefix("speed:") {
+                if let Ok(v) = v.parse::<f32>() {
+                    let app = app.clone();
+                    std::thread::spawn(move || app.state::<Arc<App>>().set_speed(&app, v));
                 }
-                "stop" => state.stop(),
+                return;
+            }
+            match id.as_str() {
+                "toggle" => {
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        app.state::<Arc<App>>().toggle();
+                        // The item's verb depends on whether it is speaking, so
+                        // the menu has to be rebuilt once the state settles.
+                        rebuild_menu(&app);
+                    });
+                }
+                "accessibility" => {
+                    // Shows the system dialog, which has the button that opens
+                    // the right settings pane.
+                    std::thread::spawn(|| {
+                        selection::has_accessibility(true);
+                    });
+                }
                 "quit" => app.exit(0),
                 _ => {}
             }
