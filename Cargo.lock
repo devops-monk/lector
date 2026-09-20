@@ -2222,7 +2222,7 @@ dependencies = [
 
 [[package]]
 name = "lector"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "arboard",
  "dirs",
@@ -2241,7 +2241,7 @@ dependencies = [
 
 [[package]]
 name = "lector-engine"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bzip2 0.6.1",
  "cpal",
@@ -2258,7 +2258,7 @@ dependencies = [
 
 [[package]]
 name = "lector-text"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "icu_segmenter",
 ]
