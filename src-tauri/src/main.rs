@@ -8,10 +8,11 @@
 //! That is deliberate: a second surface should be a second *caller*, never a
 //! second implementation.
 
+mod api;
 mod selection;
 #[cfg(target_os = "macos")]
 mod services;
-mod settings;
+pub mod settings;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -24,7 +25,7 @@ use lector_text::SanitizeOptions;
 use settings::Settings;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 /// Mirrors Vox's default, one modifier over. Vox takes Alt+Space to start
@@ -154,6 +155,34 @@ impl App {
         rebuild_menu(app);
     }
 
+    /// Speaks a sample in a voice without selecting it.
+    ///
+    /// The engine reloads for the audition and again when the real voice next
+    /// speaks. That is a second of work in exchange for not having to adopt a
+    /// voice to hear it, which with 181 of them is the right trade.
+    fn audition(&self, model_id: &str, sid: i32) {
+        let Some(m) = catalog::model(model_id) else {
+            return;
+        };
+        let Some(dir) = self.installed_dir(m) else {
+            return;
+        };
+        let name = m.speakers.iter().find(|sp| sp.sid == sid).map(|sp| sp.name);
+        let Ok(voice) = Voice::from_dir_for(&dir, m.engine, sid, name) else {
+            return;
+        };
+
+        let mut guard = self.lector.lock().unwrap();
+        if let Some(l) = guard.as_mut() {
+            let previous = l.voice().clone();
+            l.set_voice(voice);
+            l.speak(catalog::AUDITION, SanitizeOptions::VERBATIM, true);
+            // Put the chosen voice back, so auditioning never silently changes
+            // what the hotkey will use.
+            l.set_voice(previous);
+        }
+    }
+
     fn select_voice(&self, app: &AppHandle, model_id: &str, sid: i32) {
         {
             let mut s = self.settings.lock().unwrap();
@@ -170,7 +199,7 @@ impl App {
 ///
 /// With no window there is nowhere else to put it, and a 349 MB download with no
 /// feedback is indistinguishable from a hang.
-fn install_model(app: AppHandle, model_id: String) {
+pub fn install_model(app: AppHandle, model_id: String) {
     let state = app.state::<Arc<App>>().inner().clone();
     let Some(m) = catalog::model(&model_id) else {
         return;
@@ -188,6 +217,15 @@ fn install_model(app: AppHandle, model_id: String) {
         };
 
         let result = install::install(&root, m, &Cancel::new(), |p| {
+            let _ = app.emit(
+                "progress",
+                serde_json::json!({
+                    "id": m.id,
+                    "received": p.received,
+                    "total": p.total,
+                    "phase": format!("{:?}", p.phase),
+                }),
+            );
             let Some(t) = tray.as_ref() else { return };
             match p.phase {
                 Phase::Downloading if p.total > 0 => {
@@ -208,25 +246,19 @@ fn install_model(app: AppHandle, model_id: String) {
 
         match result {
             // Selecting it is the point of downloading it.
-            Ok(_) => state.select_voice(&app, &model_id, m.speakers[0].sid),
+            Ok(_) => {
+                state.select_voice(&app, &model_id, m.speakers[0].sid);
+                let _ = app.emit("changed", ());
+            }
             Err(e) => {
                 eprintln!("lector: {e}");
+                let _ = app.emit("failed", serde_json::json!({"id": m.id, "error": e}));
                 if let Some(t) = tray.as_ref() {
                     set_tip(t, &format!("Lector — {} failed to download", m.label));
                 }
             }
         }
     });
-}
-
-#[tauri::command]
-fn speak_text(text: String, state: State<Arc<App>>) {
-    state.speak(&text);
-}
-
-#[tauri::command]
-fn stop_speaking(state: State<Arc<App>>) {
-    state.stop();
 }
 
 fn main() {
@@ -250,7 +282,16 @@ fn main() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![speak_text, stop_speaking])
+        .invoke_handler(tauri::generate_handler![
+            api::snapshot,
+            api::speak,
+            api::stop,
+            api::choose_voice,
+            api::set_speed,
+            api::audition,
+            api::install,
+            api::grant_accessibility,
+        ])
         .setup(move |app| {
             let data_dir = app
                 .path()
@@ -275,12 +316,13 @@ fn main() {
             app.global_shortcut().register(hotkey())?;
             build_tray(app.handle())?;
 
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+            }
+
             // No windows, so the app must not quit when none are open.
             #[cfg(target_os = "macos")]
-            {
-                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-                services::register(state.clone());
-            }
+            services::register(state.clone());
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -335,6 +377,13 @@ fn menu_for(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     }
 
     // One item that changes verb, rather than two where one is always dead.
+    items.push(Box::new(MenuItem::with_id(
+        app,
+        "window",
+        "Open Lector",
+        true,
+        None::<&str>,
+    )?));
     items.push(Box::new(MenuItem::with_id(
         app,
         "toggle",
@@ -417,6 +466,16 @@ fn menu_for(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     Menu::with_items(app, &refs)
 }
 
+/// Brings the window back. Closing it leaves Lector running in the menu bar, so
+/// this is how it returns rather than by relaunching the app.
+fn show_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
 fn rebuild_menu(app: &AppHandle) {
     if let Some(tray) = app.tray_by_id("lector") {
         if let Ok(menu) = menu_for(app) {
@@ -466,6 +525,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 return;
             }
             match id.as_str() {
+                "window" => show_window(app),
                 "toggle" => {
                     let app = app.clone();
                     std::thread::spawn(move || {

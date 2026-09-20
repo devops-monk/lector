@@ -2,9 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- No Dock icon and no menu bar: Lector lives in the status bar only. -->
-  <key>LSUIElement</key>
-  <true/>
+  <!-- Lector has a real window, so it is an ordinary app with a Dock icon, and
+       also keeps a menu bar item. Marking it LSUIElement would make it a pure
+       accessory, and an accessory cannot bring its own windows to the front. -->
 
   <!-- The second entry point. Right-click selected text in any Cocoa app and
        macOS hands the text straight to us, with no Accessibility permission and

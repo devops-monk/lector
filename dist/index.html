@@ -1,4 +1,49 @@
 <!doctype html>
-<meta charset="utf-8">
-<title>Lector</title>
-<p>Lector runs in the menu bar.</p>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lector</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="drag"></div>
+  <div id="app">
+    <aside id="side">
+      <header>
+        <h2>Voices</h2>
+        <span id="count"></span>
+      </header>
+      <input id="search" type="search" placeholder="Search voices…" autocomplete="off" spellcheck="false">
+      <div id="models"></div>
+    </aside>
+
+    <main id="main">
+      <div id="bar">
+        <div id="now">No voice<small></small></div>
+        <span class="sp"></span>
+        <span id="hint">Select text anywhere · <kbd>⌥⇧Space</kbd></span>
+      </div>
+
+      <div id="warn">
+        <span id="warntext"></span>
+        <button id="warnbtn">Grant</button>
+      </div>
+
+      <textarea id="text" spellcheck="false"
+        placeholder="Type or paste anything here, then press Speak.&#10;&#10;Or select text in any other app and press ⌥⇧Space."></textarea>
+
+      <div id="foot">
+        <button id="go" class="primary">Speak</button>
+        <div id="speedwrap">
+          <label for="speed">Speed</label>
+          <input id="speed" type="range" min="0.6" max="2" step="0.05" value="1">
+          <span id="speedval">1.0×</span>
+        </div>
+        <div id="level"><i></i></div>
+      </div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
