@@ -1,0 +1,18 @@
+# sherpa-onnx ships its Windows static library as the /MT build -- the one that
+# links the C runtime statically. Rust's MSVC target defaults to /MD, the dynamic
+# one, and mixing the two is what produces:
+#
+#   LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs
+#
+# Two C runtimes means two heaps, two errno values and two locale states. Memory
+# allocated by one and freed by the other is a crash. Here it would probably have
+# stayed benign, since sherpa allocates and frees on its own side of the C API --
+# but "probably benign" is not a thing to leave in a linker warning.
+#
+# Matching Rust to the library it links resolves it, and has the side benefit
+# that the .exe needs no Visual C++ redistributable installed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
