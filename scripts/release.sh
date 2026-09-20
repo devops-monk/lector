@@ -53,7 +53,14 @@ grep -q "\"version\": \"$version\"" src-tauri/tauri.conf.json \
   || { echo "tauri.conf.json was not updated" >&2; exit 1; }
 
 git add Cargo.toml Cargo.lock src-tauri/tauri.conf.json
-git commit -m "Release v$version"
+# Re-releasing the version already in the manifests changes no files, and an
+# empty commit would abort the script before it ever tags. Tagging what is
+# already there is a legitimate thing to want, especially for the first release.
+if git diff --cached --quiet; then
+  echo "version is already $version; tagging the current commit"
+else
+  git commit -m "Release v$version"
+fi
 git tag -a "v$version" -m "v$version"
 
 echo
