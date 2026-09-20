@@ -41,13 +41,18 @@ const SILENCE_FLOOR: f32 = 0.005;
 /// Fade applied to a trimmed edge, to avoid a click where we cut.
 const FADE_MS: f32 = 10.0;
 
+/// What a `Speak` carries. Boxed in `Command` because it is far larger than the
+/// other variants, and every message on the channel would otherwise be sized to
+/// fit this one.
+pub struct SpeakJob {
+    pub generation: u64,
+    pub voice: Voice,
+    pub chunks: Vec<String>,
+    pub speed: f32,
+}
+
 pub enum Command {
-    Speak {
-        generation: u64,
-        voice: Voice,
-        chunks: Vec<String>,
-        speed: f32,
-    },
+    Speak(Box<SpeakJob>),
     Stop,
     Shutdown,
 }
@@ -64,12 +69,12 @@ impl Handle {
     pub fn speak(&self, voice: Voice, chunks: Vec<String>, speed: f32) {
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         self.state.request_flush();
-        let _ = self.tx.send(Command::Speak {
+        let _ = self.tx.send(Command::Speak(Box::new(SpeakJob {
             generation,
             voice,
             chunks,
             speed,
-        });
+        })));
     }
 
     pub fn stop(&self) {
@@ -209,12 +214,13 @@ impl Actor {
                     self.out.borrow_mut().resampler.reset();
                     self.speaking.store(false, Ordering::Relaxed);
                 }
-                Command::Speak {
-                    generation,
-                    voice,
-                    chunks,
-                    speed,
-                } => {
+                Command::Speak(job) => {
+                    let SpeakJob {
+                        generation,
+                        voice,
+                        chunks,
+                        speed,
+                    } = *job;
                     if generation < self.generation.load(Ordering::Acquire) {
                         continue; // superseded before we even started
                     }
@@ -365,6 +371,8 @@ fn load(voice: &Voice) -> Result<OfflineTts, String> {
                 tokens: Some(voice.tokens.clone()),
                 data_dir: Some(voice.data_dir.clone()),
                 voices: Some(voice.voices_bin.clone().unwrap_or_default()),
+                lexicon: voice.lexicon.clone(),
+                dict_dir: voice.dict_dir.clone(),
                 ..Default::default()
             },
             num_threads: THREADS,

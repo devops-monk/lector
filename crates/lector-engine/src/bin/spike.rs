@@ -24,7 +24,18 @@ use sherpa_onnx::{
     OfflineTtsVitsModelConfig,
 };
 
-const MODEL_DIR: &str = "models/vits-piper-en_US-amy-medium-int8";
+/// Override with LECTOR_MODEL to measure a different model, and LECTOR_SID to
+/// pick a speaker within it.
+fn model_dir() -> String {
+    std::env::var("LECTOR_MODEL")
+        .unwrap_or_else(|_| "models/vits-piper-en_US-amy-medium-int8".into())
+}
+fn sid() -> i32 {
+    std::env::var("LECTOR_SID")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
 /// 4 is the measured knee on Apple silicon (RTF 0.54 / 0.41 / 0.49 at 2 / 4 / 8),
 /// and it leaves cores free for the audio thread.
 const THREADS: i32 = 4;
@@ -57,30 +68,38 @@ fn main() {
     // ---- load -------------------------------------------------------------
     // No voices.bin in this directory, so it is a VITS/Piper model rather than
     // Kokoro. That single check is the whole engine discriminator.
-    let dir = std::path::Path::new(MODEL_DIR);
-    assert!(
-        dir.join("tokens.txt").exists(),
-        "model not found at {MODEL_DIR}"
-    );
-    assert!(
-        !dir.join("voices.bin").exists(),
-        "that's a Kokoro model, not Piper"
-    );
-
+    let md = model_dir();
+    let dir = std::path::Path::new(&md);
+    assert!(dir.join("tokens.txt").exists(), "model not found at {md}");
     let t0 = Instant::now();
-    let cfg = OfflineTtsConfig {
-        model: OfflineTtsModelConfig {
-            // All seven engine configs are always present; the unset ones are
-            // inert. Which engine runs is decided by which one has a model path.
+    let voice = lector_engine::Voice::from_dir(dir, sid()).expect("voice");
+    let model = match voice.engine {
+        lector_engine::Engine::Piper => OfflineTtsModelConfig {
             vits: OfflineTtsVitsModelConfig {
-                model: Some(format!("{MODEL_DIR}/en_US-amy-medium.onnx")),
-                tokens: Some(format!("{MODEL_DIR}/tokens.txt")),
-                data_dir: Some(format!("{MODEL_DIR}/espeak-ng-data")),
+                model: Some(voice.model_file.clone()),
+                tokens: Some(voice.tokens.clone()),
+                data_dir: Some(voice.data_dir.clone()),
                 ..Default::default()
             },
             num_threads: THREADS,
             ..Default::default()
         },
+        lector_engine::Engine::Kokoro => OfflineTtsModelConfig {
+            kokoro: sherpa_onnx::OfflineTtsKokoroModelConfig {
+                model: Some(voice.model_file.clone()),
+                tokens: Some(voice.tokens.clone()),
+                data_dir: Some(voice.data_dir.clone()),
+                voices: voice.voices_bin.clone(),
+                lexicon: voice.lexicon.clone(),
+                dict_dir: voice.dict_dir.clone(),
+                ..Default::default()
+            },
+            num_threads: THREADS,
+            ..Default::default()
+        },
+    };
+    let cfg = OfflineTtsConfig {
+        model,
         ..Default::default()
     };
     let tts = OfflineTts::create(&cfg).expect("failed to create OfflineTts");
@@ -239,7 +258,7 @@ fn main() {
     );
     println!("synthesis took      {gen_s:>8.2} s");
     println!(
-        "RTF                 {:>8.2}      (verba measured 0.14 for this voice)",
+        "RTF                 {:>8.2}      (verba: 0.14 piper int8, 0.41 kokoro fp32)",
         gen_s / audio_s
     );
 

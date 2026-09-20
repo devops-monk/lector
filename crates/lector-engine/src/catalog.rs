@@ -70,6 +70,12 @@ const PIPER_AMY: &[Speaker] = &[Speaker {
 /// English-first. The other seven Piper languages verba ships are deliberately
 /// absent: each is a checksum someone has to keep correct, for no value to a
 /// user reading English.
+///
+/// Every hash here must be verified against the live asset before it is added.
+/// These are not stable by virtue of being published somewhere: the Kokoro entry
+/// was first copied from another project's catalog and was already stale, which
+/// the installer caught only because it refuses to unpack what it cannot verify.
+/// `scripts/verify-catalog.sh` re-checks them all.
 pub const CATALOG: &[Model] = &[
     Model {
         id: "vits-piper-en_US-amy-medium-int8",
@@ -87,7 +93,7 @@ pub const CATALOG: &[Model] = &[
         label: "Kokoro",
         mb: 349,
         url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2",
-        sha256: "c133d26353d776da730870dac7da07dbfc9a5e3bc80cc5e8e83ab6e823be7046",
+        sha256: "c5f7e2d2caf082bc1d20fb70334a61d99d20b484500aad32e7cf84c128ea3298",
         speakers: KOKORO_EN,
         tradeoff: "Noticeably better. A larger download.",
     },

@@ -30,7 +30,15 @@ impl Lector {
     /// Opens the audio device and warms the model. Blocks until ready, so the
     /// first hotkey press does not pay the ~820 ms load.
     pub fn new(model_dir: &Path) -> Result<Self, String> {
-        let voice = Voice::from_dir(model_dir, 0)?;
+        Self::with_voice(Voice::from_dir(model_dir, 0)?)
+    }
+
+    /// Starts with a voice already chosen.
+    ///
+    /// Prefer this over `new` followed by `set_voice`: that pair loads the model
+    /// twice, once for the default and again when the choice turns out to
+    /// differ, and each load is most of a second.
+    pub fn with_voice(voice: Voice) -> Result<Self, String> {
         let handle = synth::spawn(voice.clone())?;
         Ok(Self {
             handle,
@@ -41,6 +49,17 @@ impl Lector {
 
     pub fn set_speed(&mut self, speed: f32) {
         self.speed = speed.clamp(0.5, 3.0);
+    }
+
+    /// Switches voice. The model is loaded lazily on the next utterance, by the
+    /// actor thread, so this returns immediately rather than blocking for the
+    /// ~800 ms a load takes.
+    pub fn set_voice(&mut self, voice: Voice) {
+        self.voice = voice;
+    }
+
+    pub fn voice(&self) -> &Voice {
+        &self.voice
     }
 
     /// Speaks text, interrupting anything already playing.

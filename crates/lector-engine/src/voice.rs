@@ -24,11 +24,21 @@ pub struct Voice {
     pub tokens: String,
     pub data_dir: String,
     pub voices_bin: Option<String>,
+    /// Comma-separated lexicon files. Multi-lingual Kokoro refuses to load
+    /// without them -- it cannot guess which pronunciation table you meant.
+    pub lexicon: Option<String>,
+    /// Jieba dictionary, for segmenting Chinese. Present only in Kokoro.
+    pub dict_dir: Option<String>,
 }
 
 impl Voice {
     /// Reads a model directory and works out what it contains.
-    pub fn from_dir(dir: &Path, sid: i32) -> Result<Self, String> {
+    ///
+    /// `speaker` picks the pronunciation table where a model ships more than
+    /// one: Kokoro's `b*` voices are British and the rest American, and handing
+    /// a British voice the US lexicon gives a subtly wrong accent rather than an
+    /// error.
+    pub fn from_dir_for(dir: &Path, sid: i32, speaker: Option<&str>) -> Result<Self, String> {
         let id = dir
             .file_name()
             .and_then(|s| s.to_str())
@@ -54,6 +64,26 @@ impl Voice {
             Engine::Piper
         };
 
+        // English first, then Chinese if the model carries it -- passing the zh
+        // table costs nothing for English text and stops CJK input from failing
+        // outright.
+        let british = speaker.is_some_and(|s| s.starts_with('b'));
+        let mut lexicons: Vec<String> = Vec::new();
+        for name in [
+            if british {
+                "lexicon-gb-en.txt"
+            } else {
+                "lexicon-us-en.txt"
+            },
+            "lexicon-zh.txt",
+        ] {
+            let p = dir.join(name);
+            if p.exists() {
+                lexicons.push(p.to_string_lossy().into_owned());
+            }
+        }
+        let dict = dir.join("dict");
+
         Ok(Self {
             id,
             engine,
@@ -64,6 +94,14 @@ impl Voice {
             voices_bin: voices_bin
                 .exists()
                 .then(|| voices_bin.to_string_lossy().into_owned()),
+            lexicon: (!lexicons.is_empty()).then(|| lexicons.join(",")),
+            dict_dir: dict.is_dir().then(|| dict.to_string_lossy().into_owned()),
         })
+    }
+
+    /// Convenience for models with a single speaker, where there is nothing to
+    /// choose between pronunciation tables.
+    pub fn from_dir(dir: &Path, sid: i32) -> Result<Self, String> {
+        Self::from_dir_for(dir, sid, None)
     }
 }

@@ -11,44 +11,75 @@
 mod selection;
 #[cfg(target_os = "macos")]
 mod services;
+mod settings;
 
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use lector_engine::Lector;
+use lector_engine::catalog::{self, Model};
+use lector_engine::install::{self, Cancel, Phase};
+use lector_engine::{Lector, Voice};
 use lector_text::SanitizeOptions;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::TrayIconBuilder;
-use tauri::{Manager, State};
+use settings::Settings;
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::tray::{TrayIcon, TrayIconBuilder};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-/// Mirrors Vox's default, one key over. Vox takes Alt+Space to start listening;
-/// Lector takes Alt+Shift+Space to start speaking.
+/// Mirrors Vox's default, one modifier over. Vox takes Alt+Space to start
+/// listening; Lector takes Alt+Shift+Space to start speaking.
 fn hotkey() -> Shortcut {
     Shortcut::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::Space)
 }
 
 pub struct App {
     lector: Mutex<Option<Lector>>,
+    settings: Mutex<Settings>,
+    data_dir: PathBuf,
+    /// Model ids with a download in flight. A set rather than a flag so two
+    /// concurrent downloads cannot cancel or duplicate each other.
+    installing: Mutex<HashSet<String>>,
 }
 
 impl App {
+    fn models_dir(&self) -> PathBuf {
+        self.data_dir.join("models")
+    }
+
+    /// Where a model actually is, allowing for a checkout that already has one.
+    ///
+    /// The repo copy is a development convenience: `cargo run` should work
+    /// without first downloading 21 MB into an app-data directory nobody has
+    /// looked in.
+    fn installed_dir(&self, m: &Model) -> Option<PathBuf> {
+        let candidates = [
+            self.models_dir().join(m.id),
+            PathBuf::from("models").join(m.id),
+            PathBuf::from("../models").join(m.id),
+        ];
+        candidates
+            .into_iter()
+            .find(|p| p.join("tokens.txt").exists())
+    }
+
     /// Speaks the current selection, or stops if already speaking.
     ///
     /// The toggle is the whole interaction: one key starts, the same key stops.
     fn toggle(&self) {
         let guard = self.lector.lock().unwrap();
         let Some(lector) = guard.as_ref() else {
-            eprintln!("lector: engine unavailable");
+            eprintln!("lector: no voice installed");
             return;
         };
-
         if lector.is_speaking() {
             lector.stop();
             return;
         }
+        drop(guard);
 
         match selection::selected_text() {
-            Ok(text) => lector.speak(&text, SanitizeOptions::READING, true),
+            Ok(text) => self.speak(&text),
             Err(e) => eprintln!("lector: {e}"),
         }
     }
@@ -68,33 +99,117 @@ impl App {
             l.stop();
         }
     }
+
+    /// Loads the engine for the currently chosen voice, if its files are present.
+    fn load_engine(&self) {
+        let s = self.settings.lock().unwrap().clone();
+        let Some(m) = catalog::model(&s.model_id) else {
+            return;
+        };
+        let Some(dir) = self.installed_dir(m) else {
+            eprintln!("lector: {} is not installed", m.label);
+            return;
+        };
+        let speaker_name = m
+            .speakers
+            .iter()
+            .find(|sp| sp.sid == s.speaker)
+            .map(|sp| sp.name);
+        let voice = match Voice::from_dir_for(&dir, s.speaker, speaker_name) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("lector: {e}");
+                return;
+            }
+        };
+
+        let mut guard = self.lector.lock().unwrap();
+        match guard.as_mut() {
+            // Already running: switching voice is a field change, not a restart.
+            // The actor loads the new model lazily on the next utterance.
+            Some(l) => {
+                l.set_voice(voice);
+                l.set_speed(s.speed);
+            }
+            // Start with the chosen voice rather than loading a default first.
+            None => match Lector::with_voice(voice) {
+                Ok(mut l) => {
+                    l.set_speed(s.speed);
+                    *guard = Some(l);
+                }
+                Err(e) => eprintln!("lector: engine failed to start: {e}"),
+            },
+        }
+    }
+
+    fn select_voice(&self, app: &AppHandle, model_id: &str, sid: i32) {
+        {
+            let mut s = self.settings.lock().unwrap();
+            s.model_id = model_id.to_string();
+            s.speaker = sid;
+            s.save(&self.data_dir);
+        }
+        self.load_engine();
+        rebuild_menu(app);
+    }
 }
 
-/// Finds the voice to load.
+/// Downloads a model, reporting progress through the tray tooltip.
 ///
-/// Phase 1 ships one bundled Piper voice, so this is deliberately simple: look
-/// beside the executable first (how it will ship), then in the repo (how it runs
-/// in development). The catalog and downloader arrive in phase 2.
-fn model_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    const VOICE: &str = "vits-piper-en_US-amy-medium-int8";
+/// With no window there is nowhere else to put it, and a 349 MB download with no
+/// feedback is indistinguishable from a hang.
+fn install_model(app: AppHandle, model_id: String) {
+    let state = app.state::<Arc<App>>().inner().clone();
+    let Some(m) = catalog::model(&model_id) else {
+        return;
+    };
 
-    let mut candidates = Vec::new();
-    if let Ok(dir) = app.path().resource_dir() {
-        candidates.push(dir.join("models").join(VOICE));
+    if !state.installing.lock().unwrap().insert(model_id.clone()) {
+        return; // already downloading
     }
-    candidates.push(std::path::PathBuf::from("models").join(VOICE));
-    candidates.push(std::path::PathBuf::from("../models").join(VOICE));
+    let root = state.models_dir();
 
-    candidates
-        .into_iter()
-        .find(|p| p.join("tokens.txt").exists())
+    std::thread::spawn(move || {
+        let tray = app.tray_by_id("lector");
+        let set_tip = |t: &TrayIcon, s: &str| {
+            let _ = t.set_tooltip(Some(s));
+        };
+
+        let result = install::install(&root, m, &Cancel::new(), |p| {
+            let Some(t) = tray.as_ref() else { return };
+            match p.phase {
+                Phase::Downloading if p.total > 0 => {
+                    let pct = p.received * 100 / p.total;
+                    set_tip(t, &format!("Lector — downloading {} {pct}%", m.label));
+                }
+                Phase::Downloading => set_tip(t, &format!("Lector — downloading {}", m.label)),
+                Phase::Verifying => set_tip(t, &format!("Lector — verifying {}", m.label)),
+                Phase::Unpacking => set_tip(t, &format!("Lector — unpacking {}", m.label)),
+                Phase::Done => set_tip(t, "Lector"),
+            }
+        });
+
+        state.installing.lock().unwrap().remove(&model_id);
+        if let Some(t) = tray.as_ref() {
+            set_tip(t, "Lector");
+        }
+
+        match result {
+            // Selecting it is the point of downloading it.
+            Ok(_) => state.select_voice(&app, &model_id, m.speakers[0].sid),
+            Err(e) => {
+                eprintln!("lector: {e}");
+                if let Some(t) = tray.as_ref() {
+                    set_tip(t, &format!("Lector — {} failed to download", m.label));
+                }
+            }
+        }
+    });
 }
 
 #[tauri::command]
 fn speak_text(text: String, state: State<Arc<App>>) {
-    if let Some(l) = state.lector.lock().unwrap().as_ref() {
-        l.speak(&text, SanitizeOptions::READING, true);
-    }
+    state.speak(&text);
 }
 
 #[tauri::command]
@@ -103,39 +218,47 @@ fn stop_speaking(state: State<Arc<App>>) {
 }
 
 fn main() {
-    let app_state = Arc::new(App {
-        lector: Mutex::new(None),
-    });
+    let app_state: Arc<Mutex<Option<Arc<App>>>> = Arc::new(Mutex::new(None));
     let hotkey_state = app_state.clone();
 
     tauri::Builder::default()
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |_app, shortcut, event| {
-                    // Fire on press only; the release event would toggle straight back.
-                    if shortcut == &hotkey() && event.state() == ShortcutState::Pressed {
-                        let s = hotkey_state.clone();
-                        // The handler runs on the main thread and synthesizing a
-                        // keystroke from it would deadlock against the event tap.
-                        std::thread::spawn(move || s.toggle());
+                    // Fire on press only; the release would toggle straight back.
+                    if shortcut != &hotkey() || event.state() != ShortcutState::Pressed {
+                        return;
                     }
+                    let Some(s) = hotkey_state.lock().unwrap().clone() else {
+                        return;
+                    };
+                    // Synthesizing a keystroke from the main thread would
+                    // deadlock against the event tap that delivered this.
+                    std::thread::spawn(move || s.toggle());
                 })
                 .build(),
         )
-        .manage(app_state.clone())
         .invoke_handler(tauri::generate_handler![speak_text, stop_speaking])
         .setup(move |app| {
-            // Loading blocks for ~1s (audio device + model warm). Doing it here
-            // rather than on first hotkey means the first press is instant.
-            match model_dir(app.handle()) {
-                Some(dir) => match Lector::new(&dir) {
-                    Ok(l) => *app_state.lector.lock().unwrap() = Some(l),
-                    Err(e) => eprintln!("lector: engine failed to start: {e}"),
-                },
-                None => eprintln!(
-                    "lector: no voice found; expected models/vits-piper-en_US-amy-medium-int8"
-                ),
-            }
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| PathBuf::from("."));
+            let settings = Settings::load(&data_dir);
+
+            let state = Arc::new(App {
+                lector: Mutex::new(None),
+                settings: Mutex::new(settings),
+                data_dir,
+                installing: Mutex::new(HashSet::new()),
+            });
+            app.manage(state.clone());
+            *app_state.lock().unwrap() = Some(state.clone());
+
+            // Loading blocks for ~1s (audio device plus model warm). Doing it
+            // here rather than on first hotkey is the difference between a key
+            // that responds in 470ms and one that responds in 1.3s.
+            state.load_engine();
 
             app.global_shortcut().register(hotkey())?;
             build_tray(app.handle())?;
@@ -144,16 +267,20 @@ fn main() {
             #[cfg(target_os = "macos")]
             {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-                services::register(app_state.clone());
+                services::register(state.clone());
             }
-
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running lector");
 }
 
-fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+/// Builds the tray menu from the catalog and what is actually on disk.
+fn menu_for(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let state = app.state::<Arc<App>>();
+    let chosen = state.settings.lock().unwrap().clone();
+    let installing = state.installing.lock().unwrap().clone();
+
     let speak = MenuItem::with_id(
         app,
         "speak",
@@ -162,23 +289,102 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         Some("Alt+Shift+Space"),
     )?;
     let stop = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Lector", true, Some("Cmd+Q"))?;
-    let menu = Menu::with_items(
-        app,
-        &[&speak, &stop, &PredefinedMenuItem::separator(app)?, &quit],
-    )?;
 
+    let voices = Submenu::new(app, "Voice", true)?;
+    for m in catalog::CATALOG {
+        let installed = state.installed_dir(m).is_some();
+        if installing.contains(m.id) {
+            voices.append(&MenuItem::with_id(
+                app,
+                format!("busy:{}", m.id),
+                format!("{} — downloading…", m.label),
+                false,
+                None::<&str>,
+            )?)?;
+        } else if !installed {
+            voices.append(&MenuItem::with_id(
+                app,
+                format!("install:{}", m.id),
+                format!("Download {} ({} MB) — {}", m.label, m.mb, m.tradeoff),
+                true,
+                None::<&str>,
+            )?)?;
+        } else {
+            // One row per speaker, so choosing a voice is one click rather than
+            // a model choice followed by a speaker choice.
+            for sp in m.speakers {
+                let on = chosen.model_id == m.id && chosen.speaker == sp.sid;
+                let label = if m.speakers.len() == 1 {
+                    m.label.to_string()
+                } else {
+                    format!("{} — {}", m.label, sp.name)
+                };
+                voices.append(&CheckMenuItem::with_id(
+                    app,
+                    format!("voice:{}:{}", m.id, sp.sid),
+                    label,
+                    true,
+                    on,
+                    None::<&str>,
+                )?)?;
+            }
+        }
+    }
+
+    let quit = MenuItem::with_id(app, "quit", "Quit Lector", true, Some("Cmd+Q"))?;
+    Menu::with_items(
+        app,
+        &[
+            &speak,
+            &stop,
+            &PredefinedMenuItem::separator(app)?,
+            &voices,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
+    )
+}
+
+fn rebuild_menu(app: &AppHandle) {
+    if let Some(tray) = app.tray_by_id("lector") {
+        if let Ok(menu) = menu_for(app) {
+            let _ = tray.set_menu(Some(menu));
+        }
+    }
+}
+
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     TrayIconBuilder::with_id("lector")
         .icon(app.default_window_icon().unwrap().clone())
         .icon_as_template(true)
-        .menu(&menu)
+        .tooltip("Lector")
+        .menu(&menu_for(app)?)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| {
-            let state = app.state::<Arc<App>>();
-            match event.id().as_ref() {
+            let state = app.state::<Arc<App>>().inner().clone();
+            let id = event.id().as_ref().to_string();
+
+            if let Some(model_id) = id.strip_prefix("install:") {
+                install_model(app.clone(), model_id.to_string());
+                rebuild_menu(app);
+                return;
+            }
+            if let Some(rest) = id.strip_prefix("voice:") {
+                if let Some((model_id, sid)) = rest.rsplit_once(':') {
+                    if let Ok(sid) = sid.parse::<i32>() {
+                        let (app, model_id) = (app.clone(), model_id.to_string());
+                        // load_engine can block on a model load; keep the menu
+                        // handler off that path.
+                        std::thread::spawn(move || {
+                            app.state::<Arc<App>>().select_voice(&app, &model_id, sid)
+                        });
+                    }
+                }
+                return;
+            }
+            match id.as_str() {
                 "speak" => {
-                    let s = state.inner().clone();
-                    std::thread::spawn(move || s.toggle());
+                    std::thread::spawn(move || state.toggle());
                 }
                 "stop" => state.stop(),
                 "quit" => app.exit(0),
