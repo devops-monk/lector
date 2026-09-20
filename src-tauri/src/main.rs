@@ -115,7 +115,7 @@ impl App {
             .iter()
             .find(|sp| sp.sid == s.speaker)
             .map(|sp| sp.name);
-        let voice = match Voice::from_dir_for(&dir, s.speaker, speaker_name) {
+        let voice = match Voice::from_dir_for(&dir, m.engine, s.speaker, speaker_name) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("lector: {e}");

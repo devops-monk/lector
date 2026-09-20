@@ -256,8 +256,17 @@ fn unpack(archive: &Path, dest: &Path, cancel: &Cancel) -> Result<(), String> {
             ));
         }
 
-        // Strip the leading component, which is the archive's own name.
-        let stripped: PathBuf = path.components().skip(1).collect();
+        // Strip the archive's own top-level directory.
+        //
+        // Not simply "skip the first component": some archives prefix every
+        // entry with `./`, and skipping that leaves the top-level directory in
+        // place, so the model unpacks one level too deep and nothing can find
+        // its tokens.txt. Drop any leading `.` first, then the real directory.
+        let stripped: PathBuf = path
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .skip(1)
+            .collect();
         if stripped.as_os_str().is_empty() {
             continue;
         }

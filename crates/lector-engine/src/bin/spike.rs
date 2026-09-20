@@ -19,10 +19,7 @@ use std::time::Instant;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-use sherpa_onnx::{
-    GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsModelConfig,
-    OfflineTtsVitsModelConfig,
-};
+use sherpa_onnx::{GenerationConfig, OfflineTts, OfflineTtsConfig};
 
 /// Override with LECTOR_MODEL to measure a different model, and LECTOR_SID to
 /// pick a speaker within it.
@@ -36,9 +33,6 @@ fn sid() -> i32 {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0)
 }
-/// 4 is the measured knee on Apple silicon (RTF 0.54 / 0.41 / 0.49 at 2 / 4 / 8),
-/// and it leaves cores free for the audio thread.
-const THREADS: i32 = 4;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -73,33 +67,8 @@ fn main() {
     assert!(dir.join("tokens.txt").exists(), "model not found at {md}");
     let t0 = Instant::now();
     let voice = lector_engine::Voice::from_dir(dir, sid()).expect("voice");
-    let model = match voice.engine {
-        lector_engine::Engine::Piper => OfflineTtsModelConfig {
-            vits: OfflineTtsVitsModelConfig {
-                model: Some(voice.model_file.clone()),
-                tokens: Some(voice.tokens.clone()),
-                data_dir: Some(voice.data_dir.clone()),
-                ..Default::default()
-            },
-            num_threads: THREADS,
-            ..Default::default()
-        },
-        lector_engine::Engine::Kokoro => OfflineTtsModelConfig {
-            kokoro: sherpa_onnx::OfflineTtsKokoroModelConfig {
-                model: Some(voice.model_file.clone()),
-                tokens: Some(voice.tokens.clone()),
-                data_dir: Some(voice.data_dir.clone()),
-                voices: voice.voices_bin.clone(),
-                lexicon: voice.lexicon.clone(),
-                dict_dir: voice.dict_dir.clone(),
-                ..Default::default()
-            },
-            num_threads: THREADS,
-            ..Default::default()
-        },
-    };
     let cfg = OfflineTtsConfig {
-        model,
+        model: lector_engine::synth::model_config(&voice),
         ..Default::default()
     };
     let tts = OfflineTts::create(&cfg).expect("failed to create OfflineTts");

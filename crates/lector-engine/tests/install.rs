@@ -11,6 +11,7 @@ use lector_engine::voice::Engine;
 const SPEAKERS: &[Speaker] = &[Speaker {
     name: "amy",
     sid: 0,
+    note: "",
 }];
 
 fn tmpdir(name: &str) -> std::path::PathBuf {
@@ -26,6 +27,7 @@ fn wrong_hash_model() -> Model {
         id: "vits-piper-en_US-amy-medium-int8",
         engine: Engine::Piper,
         label: "Piper",
+        accent: "American",
         mb: 21,
         url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-amy-medium-int8.tar.bz2",
         sha256: "0000000000000000000000000000000000000000000000000000000000000000",

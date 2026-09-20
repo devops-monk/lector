@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sherpa_onnx::{
-    GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsKokoroModelConfig,
-    OfflineTtsModelConfig, OfflineTtsVitsModelConfig,
+    GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsKittenModelConfig,
+    OfflineTtsKokoroModelConfig, OfflineTtsModelConfig, OfflineTtsVitsModelConfig,
 };
 
 use crate::player::{PlaybackState, Player};
@@ -352,14 +352,22 @@ fn trim_and_fade(samples: &[f32], rate: u32) -> Vec<f32> {
     out
 }
 
-fn load(voice: &Voice) -> Result<OfflineTts, String> {
-    let t0 = Instant::now();
-    let model = match voice.engine {
+/// Builds the engine-specific model configuration for a voice.
+///
+/// Public so the measurement binaries use the same code path the app does.
+/// They used to build their own copy, which silently drifted every time a new
+/// engine family was added.
+pub fn model_config(voice: &Voice) -> OfflineTtsModelConfig {
+    match voice.engine {
         VoiceEngine::Piper => OfflineTtsModelConfig {
             vits: OfflineTtsVitsModelConfig {
                 model: Some(voice.model_file.clone()),
                 tokens: Some(voice.tokens.clone()),
-                data_dir: Some(voice.data_dir.clone()),
+                // Piper phonemizes with espeak; VCTK looks words up in a
+                // lexicon instead. Passing whichever the archive carries lets
+                // one arm serve both.
+                data_dir: voice.data_dir.clone(),
+                lexicon: voice.lexicon.clone(),
                 ..Default::default()
             },
             num_threads: THREADS,
@@ -369,8 +377,8 @@ fn load(voice: &Voice) -> Result<OfflineTts, String> {
             kokoro: OfflineTtsKokoroModelConfig {
                 model: Some(voice.model_file.clone()),
                 tokens: Some(voice.tokens.clone()),
-                data_dir: Some(voice.data_dir.clone()),
-                voices: Some(voice.voices_bin.clone().unwrap_or_default()),
+                data_dir: voice.data_dir.clone(),
+                voices: voice.voices_bin.clone(),
                 lexicon: voice.lexicon.clone(),
                 dict_dir: voice.dict_dir.clone(),
                 ..Default::default()
@@ -378,9 +386,24 @@ fn load(voice: &Voice) -> Result<OfflineTts, String> {
             num_threads: THREADS,
             ..Default::default()
         },
-    };
+        VoiceEngine::Kitten => OfflineTtsModelConfig {
+            kitten: OfflineTtsKittenModelConfig {
+                model: Some(voice.model_file.clone()),
+                tokens: Some(voice.tokens.clone()),
+                data_dir: voice.data_dir.clone(),
+                voices: voice.voices_bin.clone(),
+                ..Default::default()
+            },
+            num_threads: THREADS,
+            ..Default::default()
+        },
+    }
+}
+
+fn load(voice: &Voice) -> Result<OfflineTts, String> {
+    let t0 = Instant::now();
     let cfg = OfflineTtsConfig {
-        model,
+        model: model_config(voice),
         ..Default::default()
     };
     let tts = OfflineTts::create(&cfg).ok_or_else(|| format!("could not load {}", voice.id))?;
