@@ -156,9 +156,49 @@ sudo apt-get install -y \
 The first build downloads a prebuilt sherpa-onnx static library (~25 MB, added to
 the binary). No cmake, no C++ compile, ~30 s cold.
 
-On first launch there are no voices; use the menu bar to download one. The hotkey
-needs Accessibility permission — launched from a terminal that already has it,
-the binary inherits it; a bundled app asks for its own.
+On first launch there are no voices; use the window to download one.
+
+### Accessibility, and why the grant keeps resetting
+
+The hotkey needs Accessibility permission to read the text you have selected.
+There is a trap here worth knowing about before it wastes an afternoon.
+
+macOS identifies apps in the privacy database by their **code signature**, not by
+name, path or bundle id. Release builds are *ad-hoc* signed — no certificate — so
+their identity is a hash of the binary, which changes on **every build**. The
+effect is that after any rebuild or reinstall, System Settings still lists Lector
+as enabled while the running app is, to the system, a different application that
+was never granted anything.
+
+For local development, sign with a stable identity instead:
+
+```sh
+./scripts/make-signing-cert.sh     # once: a self-signed cert in your keychain
+./scripts/dev-install.sh           # build, sign, install to /Applications
+```
+
+The designated requirement then keys on the certificate rather than the binary,
+so the grant survives rebuilds. Verify with:
+
+```sh
+codesign -d -r- /Applications/Lector.app
+# designated => identifier "com.devopsmonk.lector" and certificate leaf = H"..."
+#                                                   ^ stable; a cdhash here is not
+```
+
+Always run the copy in `/Applications`, not the one in
+`target/release/bundle/` — they are different apps as far as permissions are
+concerned, and running one while having granted the other is the most common
+cause of this confusion.
+
+If a grant does get stranded:
+
+```sh
+tccutil reset Accessibility com.devopsmonk.lector
+```
+
+then relaunch and grant again. The Services menu entry (right-click → *Speak with
+Lector*) needs no Accessibility permission at all and works regardless.
 
 ### Exercising the pieces
 
