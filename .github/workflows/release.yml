@@ -105,6 +105,17 @@ jobs:
 
       # A release nobody has launched is a release nobody has tested. This will
       # not press the hotkey, but it catches a bundle that cannot start at all.
+      - name: Verify the macOS signature
+        if: runner.os == 'macOS'
+        run: |
+          app="$BUNDLE_DIR/macos/Lector.app"
+          codesign --verify --deep --strict "$app"
+          # Apple silicon refuses to launch a binary with no signature at all and
+          # reports it as damaged, so an unsigned bundle must never be staged.
+          codesign -dv "$app" 2>&1 | grep -q 'Signature=' \
+            || { echo "bundle is unsigned" >&2; exit 1; }
+          codesign -dv "$app" 2>&1 | grep -E 'Signature|Identifier'
+
       - name: Smoke-test the bundle (macOS)
         if: runner.os == 'macOS' && matrix.target == ''
         run: |
@@ -185,10 +196,23 @@ jobs:
             | Windows | `*-windows-x64.exe` (installer) or `.msi` |
             | Linux | `*-linux-x64.AppImage` or `.deb` |
 
-            **Unsigned.** macOS will refuse to open it on first launch: right-click
-            the app and choose Open, or run
-            `xattr -dr com.apple.quarantine /Applications/Lector.app`. Windows
-            SmartScreen will warn for the same reason.
+            ### First launch
+
+            Lector is **ad-hoc signed but not notarized** — there is no paid Apple
+            Developer certificate behind it. macOS will not open it by
+            double-clicking the first time.
+
+            **macOS:** drag Lector to Applications, then either
+
+            - right-click it and choose **Open**, then **Open** again in the dialog, or
+            - run `xattr -dr com.apple.quarantine /Applications/Lector.app`
+
+            Once opened this way, it launches normally thereafter. If you see
+            *"Lector is damaged and can't be opened"*, that is the same thing:
+            macOS quarantining an un-notarized download, not a corrupt file. The
+            `xattr` command above clears it.
+
+            **Windows:** SmartScreen will warn; choose *More info* then *Run anyway*.
 
             **Platform support is uneven, honestly:** the hotkey and menu bar work
             everywhere, but the Services menu entry is macOS-only, and Lector has

@@ -106,10 +106,24 @@ Download from [Releases](https://github.com/devops-monk/lector/releases):
 | Windows | `Lector-*-windows-x64.exe` or `.msi` |
 | Linux | `Lector-*-linux-x64.AppImage` or `.deb` |
 
-Builds are **unsigned**. macOS will refuse to open it the first time: right-click
-the app and choose *Open*, or run
-`xattr -dr com.apple.quarantine /Applications/Lector.app`. Windows SmartScreen
-warns for the same reason.
+### First launch
+
+Builds are **ad-hoc signed but not notarized** — there is no paid Apple Developer
+certificate behind this project. macOS will not open it by double-clicking the
+first time.
+
+On macOS, drag Lector to Applications, then either right-click it and choose
+**Open** (and **Open** again in the dialog), or run:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Lector.app
+```
+
+After that it launches normally. If macOS says **"Lector is damaged and can't be
+opened"**, that is the same quarantine mechanism rather than a corrupt download —
+Apple silicon reports un-notarized apps that way. The command above clears it.
+
+On Windows, SmartScreen will warn; choose *More info* then *Run anyway*.
 
 ### Platform support, honestly
 
