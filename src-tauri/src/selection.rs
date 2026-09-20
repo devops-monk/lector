@@ -9,7 +9,6 @@
 use std::time::Duration;
 
 use arboard::Clipboard;
-use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
 /// How long to wait for the frontmost app to service the copy. Too short and we
 /// read the previous clipboard contents and speak the wrong thing.
@@ -111,24 +110,44 @@ pub fn selected_text() -> Result<String, String> {
     Ok(got)
 }
 
+/// Posts Command-C.
+///
+/// Deliberately not via `enigo` on macOS. enigo turns a character into a keycode
+/// by asking the Text Services Manager for the current layout, and
+/// `TSMGetInputSourceProperty` asserts it is running on the main dispatch queue.
+/// This function is called from the hotkey handler, which runs on a worker
+/// thread on purpose -- synthesizing a keystroke from the main thread would
+/// deadlock against the event tap that delivered the hotkey. So enigo traps.
+///
+/// Posting the event directly needs no layout lookup and is thread-safe. The
+/// keycode is positional anyway: 8 is the key in the C position on every layout,
+/// and Command-C is bound to that position rather than to the letter.
 #[cfg(target_os = "macos")]
 fn press_copy() -> Result<(), String> {
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| format!("{e}. Lector needs Accessibility permission."))?;
-    enigo
-        .key(Key::Meta, Direction::Press)
-        .map_err(|e| e.to_string())?;
-    enigo
-        .key(Key::Unicode('c'), Direction::Click)
-        .map_err(|e| e.to_string())?;
-    enigo
-        .key(Key::Meta, Direction::Release)
-        .map_err(|e| e.to_string())?;
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    /// kVK_ANSI_C.
+    const KEY_C: u16 = 8;
+
+    // HIDSystemState makes the event look like it came from the keyboard, which
+    // is what applications watch for.
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|_| "could not create an event source. Lector needs Accessibility permission.")?;
+
+    for down in [true, false] {
+        let event = CGEvent::new_keyboard_event(source.clone(), KEY_C, down)
+            .map_err(|_| "could not create the key event")?;
+        event.set_flags(CGEventFlags::CGEventFlagCommand);
+        event.post(CGEventTapLocation::HID);
+    }
     Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
 fn press_copy() -> Result<(), String> {
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
     enigo
         .key(Key::Control, Direction::Press)
