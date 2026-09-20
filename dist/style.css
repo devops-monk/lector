@@ -155,17 +155,43 @@ kbd {
   color: inherit; border-radius: 6px; padding: 3px 10px; cursor: pointer; font: inherit;
 }
 
-#text {
-  flex: 1; margin: 14px 20px; padding: 14px 16px;
+/* The text pane owns the level meter, which sits on its top edge like a
+   playback indicator. It used to live in the footer beside the speed slider,
+   where two thin horizontal tracks side by side read as one control. */
+#pane {
+  flex: 1; margin: 14px 20px; min-height: 0;
+  display: flex; flex-direction: column;
   border: 1px solid var(--line); border-radius: var(--radius);
-  background: var(--paper-2); color: var(--ink);
+  background: var(--paper-2); overflow: hidden;
+}
+#pane:focus-within { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+#level { height: 2px; background: transparent; flex: none; }
+#level > i {
+  display: block; height: 100%; width: 0;
+  background: linear-gradient(90deg, var(--accent), var(--ok));
+  transition: width .08s linear, opacity .25s;
+}
+
+#text {
+  flex: 1; padding: 14px 16px; min-height: 0;
+  border: 0; background: none; color: var(--ink);
   font: 15px/1.7 var(--font); resize: none;
 }
-#text:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+#text:focus { outline: none; }
 
 #foot {
   padding: 0 20px 18px; display: flex; align-items: center; gap: 14px;
 }
+
+/* Boxed, so the slider reads as one grouped control rather than as a loose
+   track floating next to everything else in the row. */
+#speedwrap {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px;
+  color: var(--ink-2); font-size: 12px;
+}
+#speedval { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
 
 button.primary {
   background: var(--accent); color: #fff; border: 0;
@@ -175,10 +201,6 @@ button.primary {
 button.primary:disabled { opacity: .4; cursor: default; }
 button.primary.stop { background: var(--ink-2); }
 
-#speedwrap { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 12px; }
 #speed { width: 130px; accent-color: var(--accent); }
-
-#level { flex: 1; height: 3px; background: var(--paper-3); border-radius: 2px; overflow: hidden; }
-#level > i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .08s; }
 
 .empty { color: var(--ink-3); padding: 24px 12px; text-align: center; font-size: 12px; }

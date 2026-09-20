@@ -94,6 +94,20 @@ pub fn snapshot(state: State<Arc<App>>) -> Snapshot {
     }
 }
 
+/// Current output level, 0.0..=1.0.
+///
+/// Separate from `snapshot` because it is polled many times a second while
+/// speaking, and the snapshot walks the whole catalog.
+#[tauri::command]
+pub fn level(state: State<Arc<App>>) -> f32 {
+    state
+        .lector
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map_or(0.0, |l| l.level())
+}
+
 #[tauri::command]
 pub fn speak(text: String, state: State<Arc<App>>) {
     state.speak(&text);

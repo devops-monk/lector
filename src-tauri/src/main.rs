@@ -284,6 +284,7 @@ fn main() {
         )
         .invoke_handler(tauri::generate_handler![
             api::snapshot,
+            api::level,
             api::speak,
             api::stop,
             api::choose_voice,

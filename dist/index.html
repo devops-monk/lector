@@ -30,8 +30,11 @@
         <button id="warnbtn">Grant</button>
       </div>
 
-      <textarea id="text" spellcheck="false"
-        placeholder="Type or paste anything here, then press Speak.&#10;&#10;Or select text in any other app and press ⌥⇧Space."></textarea>
+      <div id="pane">
+        <div id="level" aria-hidden="true"><i></i></div>
+        <textarea id="text" spellcheck="false"
+          placeholder="Type or paste anything here, then press Speak.&#10;&#10;Or select text in any other app and press ⌥⇧Space."></textarea>
+      </div>
 
       <div id="foot">
         <button id="go" class="primary">Speak</button>
@@ -40,7 +43,6 @@
           <input id="speed" type="range" min="0.6" max="2" step="0.05" value="1">
           <span id="speedval">1.0×</span>
         </div>
-        <div id="level"><i></i></div>
       </div>
     </main>
   </div>

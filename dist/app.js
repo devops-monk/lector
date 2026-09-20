@@ -196,8 +196,8 @@ listen("failed", (e) => {
   $("warn").classList.add("show");
 });
 
-// The speaking state and level are polled rather than pushed: they change far
-// faster than anything worth an event, and the window is often not visible.
+// Speaking state is polled rather than pushed: it changes far faster than
+// anything worth an event, and the window is often not visible.
 setInterval(async () => {
   if (document.hidden) return;
   const s = await invoke("snapshot");
@@ -206,5 +206,20 @@ setInterval(async () => {
     render();
   }
 }, 400);
+
+// The level meter on the pane's top edge. Polled far more often than the
+// snapshot, and only while there is something to show: a meter that updates
+// four times a second looks broken, and one that polls while idle is waste.
+const levelBar = $("level").firstElementChild;
+setInterval(async () => {
+  if (document.hidden || !snap?.speaking) {
+    levelBar.style.width = "0";
+    return;
+  }
+  const v = await invoke("level");
+  // Square-root the amplitude: speech spends most of its time well below peak,
+  // and a linear meter barely moves.
+  levelBar.style.width = `${Math.min(1, Math.sqrt(v)) * 100}%`;
+}, 60);
 
 refresh();
