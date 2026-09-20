@@ -15,42 +15,66 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
-  test:
-    # macOS arm64 is the only platform Lector targets, and the only one the
-    # bundled engine has been run on. Building elsewhere would prove nothing.
+  # Style and lint once, on the platform Lector is actually developed on.
+  # Running them four times would just be the same answer, slower.
+  lint:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v5
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-
-      # sherpa-onnx-sys downloads a prebuilt static archive into target/ and
-      # rebuilding it on every run is the slowest thing in this job, so it is
-      # cached alongside the registry.
       - uses: Swatinem/rust-cache@v2
         with:
           cache-directories: target/sherpa-onnx-prebuilt
-
       - run: cargo fmt --all -- --check
-
       - run: cargo clippy --workspace --all-targets
 
-      # The default set is offline and fast. The network tests really download
-      # models, so they are opt-in and run separately below.
+  # Build and test everywhere we ship, so a platform breaks on a pull request
+  # rather than halfway through a release.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            slug: macos-arm64
+          - os: macos-13
+            slug: macos-x64
+          - os: windows-latest
+            slug: windows-x64
+          - os: ubuntu-22.04
+            slug: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.slug }}
+          cache-directories: target/sherpa-onnx-prebuilt
+
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libxdo-dev libasound2-dev build-essential file
+
+      # The default set is offline and fast.
       - run: cargo test --workspace
 
-      - name: Model download and checksum tests
-        run: cargo test --workspace -- --ignored --test-threads=1
+      - run: cargo build --workspace --release
 
-  build:
+  # The network tests really download models, so they run once and separately:
+  # a GitHub outage should not fail the fast job on four platforms at once.
+  models:
     runs-on: macos-14
-    needs: test
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           cache-directories: target/sherpa-onnx-prebuilt
-      - run: cargo build --workspace --release
+      - run: cargo test --workspace -- --ignored --test-threads=1

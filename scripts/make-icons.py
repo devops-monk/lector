@@ -162,6 +162,13 @@ def main():
     ):
         app_icon(px).save(os.path.join(OUT, name))
 
+    # Windows wants a multi-resolution .ico; Pillow writes every size into one
+    # file. Below 64px the mark is already simplified by app_icon.
+    app_icon(256).save(
+        os.path.join(OUT, "icon.ico"),
+        sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+    )
+
     # .icns, via the platform's own tool so the result is exactly what macOS wants.
     iconset = os.path.join(OUT, "icon.iconset")
     os.makedirs(iconset, exist_ok=True)

@@ -1,7 +1,7 @@
 name: Release
 
 # Tag a version to cut a release:
-#   ./scripts/release.sh 0.2.0
+#   ./scripts/release.sh 0.2.0 && git push origin main && git push origin v0.2.0
 on:
   push:
     tags: ["v*"]
@@ -18,8 +18,45 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  check:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - id: v
+        name: Check the tag matches the version in Cargo.toml
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag="${tag#v}"
+          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "$tag" != "$crate" ]; then
+            echo "tag $tag does not match workspace version $crate" >&2
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
   bundle:
-    runs-on: macos-14
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14          # Apple silicon
+            slug: macos-arm64
+            bundles: app,dmg
+          - os: macos-13          # Intel
+            slug: macos-x64
+            bundles: app,dmg
+          - os: windows-latest
+            slug: windows-x64
+            bundles: nsis,msi
+          - os: ubuntu-22.04
+            slug: linux-x64
+            bundles: deb,appimage
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -28,31 +65,30 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          key: ${{ matrix.slug }}
           cache-directories: target/sherpa-onnx-prebuilt
 
-      - name: Check the tag matches the version in Cargo.toml
+      # Tauri's webview and tray, plus the two things Lector itself needs on
+      # Linux: libxdo for synthesizing the copy keystroke, and ALSA for cpal.
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          [ -n "${{ github.event.inputs.tag }}" ] && tag="${{ github.event.inputs.tag }}" && tag="${tag#v}"
-          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          if [ "$tag" != "$crate" ]; then
-            echo "tag $tag does not match workspace version $crate" >&2
-            exit 1
-          fi
-          echo "version=$tag" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libxdo-dev libasound2-dev build-essential file
 
       - run: cargo test --workspace
 
-      - name: Bundle the app
+      - name: Bundle
         run: |
           cargo install tauri-cli --version '^2' --locked
-          cargo tauri build --bundles app,dmg
+          cargo tauri build --bundles ${{ matrix.bundles }}
 
-      # A release that has never been launched is a release nobody has tested.
-      # This will not click the hotkey, but it does catch a bundle that cannot
-      # even start -- a missing dylib, a bad Info.plist, an unsigned binary
-      # Gatekeeper refuses outright.
-      - name: Smoke-test the bundle
+      # A release nobody has launched is a release nobody has tested. This will
+      # not press the hotkey, but it catches a bundle that cannot start at all.
+      - name: Smoke-test the bundle (macOS)
+        if: runner.os == 'macOS'
         run: |
           app=target/release/bundle/macos/Lector.app
           test -d "$app" || { echo "no app bundle produced" >&2; exit 1; }
@@ -63,31 +99,79 @@ jobs:
             || { echo "the bundle exited within 12s of launching" >&2; exit 1; }
           pkill -f 'Lector.app/Contents/MacOS' || true
 
+      # Headless runners have no display or sound card, so the app cannot be
+      # launched there. Checking the binary links and runs at all is the most
+      # these platforms can honestly assert.
+      - name: Smoke-test the binary (Windows/Linux)
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          bin=target/release/lector
+          [ "${RUNNER_OS}" = "Windows" ] && bin=target/release/lector.exe
+          test -f "$bin" || { echo "no binary produced" >&2; exit 1; }
+          ls -l "$bin"
+
       - name: Stage artifacts
+        shell: bash
         run: |
           mkdir -p dist-release
-          cp target/release/bundle/dmg/*.dmg "dist-release/Lector-${{ env.version }}-macos-arm64.dmg"
-          ditto -c -k --keepParent target/release/bundle/macos/Lector.app \
-            "dist-release/Lector-${{ env.version }}-macos-arm64.app.zip"
-          cd dist-release && shasum -a 256 * > SHA256SUMS.txt && cat SHA256SUMS.txt
+          v="${{ needs.check.outputs.version }}"
+          s="${{ matrix.slug }}"
+          shopt -s nullglob
+          # Each platform produces its own extensions, so naming by extension is
+          # unambiguous and keeps the release page readable.
+          for f in target/release/bundle/dmg/*.dmg \
+                   target/release/bundle/nsis/*.exe \
+                   target/release/bundle/msi/*.msi \
+                   target/release/bundle/deb/*.deb \
+                   target/release/bundle/appimage/*.AppImage; do
+            cp "$f" "dist-release/Lector-$v-$s.${f##*.}"
+          done
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            ditto -c -k --keepParent target/release/bundle/macos/Lector.app \
+              "dist-release/Lector-$v-$s.app.zip"
+          fi
+          ls -l dist-release
 
       - uses: actions/upload-artifact@v4
         with:
-          name: lector-macos-arm64
+          name: lector-${{ matrix.slug }}
           path: dist-release/*
 
-      - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+  publish:
+    needs: [check, bundle]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: staged
+      - name: Collect and checksum
+        run: |
+          mkdir -p dist
+          find staged -type f -exec cp {} dist/ \;
+          cd dist && shasum -a 256 * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
         with:
           draft: true
           generate_release_notes: true
-          files: dist-release/*
+          files: dist/*
           body: |
-            Local-only text to speech for macOS (Apple silicon).
+            Local-only text to speech. Nothing leaves your machine.
+
+            | Platform | Download |
+            |---|---|
+            | macOS (Apple silicon) | `*-macos-arm64.dmg` |
+            | macOS (Intel) | `*-macos-x64.dmg` |
+            | Windows | `*-windows-x64.exe` (installer) or `.msi` |
+            | Linux | `*-linux-x64.AppImage` or `.deb` |
 
             **Unsigned.** macOS will refuse to open it on first launch: right-click
             the app and choose Open, or run
-            `xattr -dr com.apple.quarantine /Applications/Lector.app`.
+            `xattr -dr com.apple.quarantine /Applications/Lector.app`. Windows
+            SmartScreen will warn for the same reason.
 
-            Lector needs Accessibility permission to read the selected text.
+            **Platform support is uneven, honestly:** the hotkey and menu bar work
+            everywhere, but the Services menu entry is macOS-only, and Lector has
+            been used in anger only on macOS (Apple silicon). Windows and Linux
+            builds compile and pass tests in CI but have not been run by a human.
