@@ -173,6 +173,28 @@ kbd {
   transition: width .08s linear, opacity .25s;
 }
 
+/* The follow-along view. Replaces the textarea while speaking, so the text is
+   in the same place and at the same size -- switching between them should not
+   move a single word. */
+#follow {
+  flex: 1; padding: 14px 16px; min-height: 0; overflow-y: auto;
+  font: 15px/1.7 var(--font); color: var(--ink-3);
+}
+#follow .chunk {
+  cursor: default; border-radius: 5px; padding: 1px 3px; margin: -1px -3px;
+  transition: color .15s, background-color .15s;
+}
+#follow .chunk.spoken { color: var(--ink-2); }
+#follow .chunk.now {
+  color: var(--ink); background: var(--accent-bg); font-weight: 500;
+}
+
+button.ghost {
+  background: none; border: 1px solid var(--line); color: var(--ink-2);
+  min-width: 90px;
+}
+button.ghost:hover { border-color: var(--accent); color: var(--accent); }
+
 #text {
   flex: 1; padding: 14px 16px; min-height: 0;
   border: 0; background: none; color: var(--ink);

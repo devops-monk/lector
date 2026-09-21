@@ -65,6 +65,12 @@ function render() {
   $("go").classList.toggle("stop", snap.speaking);
   $("go").disabled = !snap.ready;
 
+  $("pause").hidden = !snap.speaking;
+  $("pause").textContent = snap.paused ? "Resume" : "Pause";
+
+  // Speaking finished on its own: put the editable box back.
+  if (!snap.speaking && !$("follow").hidden) hideFollow();
+
   $("speed").value = snap.speed;
   $("speedval").textContent = `${Number(snap.speed).toFixed(2).replace(/0$/, "")}×`;
 
@@ -157,11 +163,81 @@ $("search").oninput = (e) => {
   renderModels();
 };
 
-$("go").onclick = () => {
-  if (snap?.speaking) return invoke("stop");
+// ---- follow-along -------------------------------------------------------
+//
+// While speaking, the textarea is swapped for a read-only view of the same
+// text split into the chunks the engine actually produced, so the highlight can
+// land on exactly what is being heard. The engine sends an index; it never
+// sends text, and this never re-splits text -- both would be a second source of
+// truth that could disagree with the voice.
+
+let chunks = [];
+
+function showFollow(cs) {
+  chunks = cs;
+  const box = $("follow");
+  box.innerHTML = "";
+  cs.forEach((c, i) => {
+    const el = document.createElement("span");
+    el.className = "chunk";
+    el.dataset.i = String(i);
+    el.textContent = c + " ";
+    box.append(el);
+  });
+  box.hidden = false;
+  $("text").hidden = true;
+}
+
+function hideFollow() {
+  $("follow").hidden = true;
+  $("text").hidden = false;
+  chunks = [];
+}
+
+function highlight(index) {
+  const box = $("follow");
+  box.querySelectorAll(".chunk").forEach((el) => {
+    const i = Number(el.dataset.i);
+    el.classList.toggle("now", i === index);
+    el.classList.toggle("spoken", i < index);
+  });
+  // Scroll only when the highlight would otherwise be off screen. Auto-scroll
+  // that fires on every chunk fights a reader who has scrolled deliberately.
+  const cur = box.querySelector(".chunk.now");
+  if (cur) {
+    const r = cur.getBoundingClientRect(), b = box.getBoundingClientRect();
+    if (r.top < b.top || r.bottom > b.bottom) {
+      cur.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }
+}
+
+$("go").onclick = async () => {
+  if (snap?.speaking) {
+    await invoke("stop");
+    hideFollow();
+    return;
+  }
   const text = $("text").value.trim();
-  if (text) invoke("speak", { text });
+  if (!text) return;
+  // Ask the engine how it will chunk this, so the view matches the audio.
+  try {
+    chunks = await invoke("chunk_preview", { text });
+    if (chunks.length) showFollow(chunks);
+  } catch { /* older backend: just speak */ }
+  invoke("speak", { text });
 };
+
+$("pause").onclick = async () => {
+  await invoke(snap?.paused ? "resume" : "pause");
+  const s = await invoke("snapshot");
+  snap = s;
+  render();
+};
+
+listen("reading", (e) => {
+  if (!$("follow").hidden) highlight(e.payload.index);
+});
 
 $("speed").oninput = (e) => {
   $("speedval").textContent = `${Number(e.target.value).toFixed(2).replace(/0$/, "")}×`;

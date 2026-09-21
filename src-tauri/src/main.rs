@@ -36,6 +36,9 @@ fn hotkey() -> Shortcut {
 
 pub struct App {
     lector: Mutex<Option<Lector>>,
+    /// Kept so the engine's position callback can emit to the window. The
+    /// callback outlives any single command, so it cannot borrow a handle.
+    app: Mutex<Option<AppHandle>>,
     settings: Mutex<Settings>,
     data_dir: PathBuf,
     /// Model ids with a download in flight. A set rather than a flag so two
@@ -133,13 +136,29 @@ impl App {
                 l.set_speed(s.speed);
             }
             // Start with the chosen voice rather than loading a default first.
-            None => match Lector::with_voice(voice) {
-                Ok(mut l) => {
-                    l.set_speed(s.speed);
-                    *guard = Some(l);
+            // First start: install the position callback. It fires when the
+            // chunk being *heard* changes, which is what a highlight follows.
+            None => {
+                let app = self.app.lock().unwrap().clone();
+                match Lector::with_voice_and_position(voice, move |p| {
+                    if let Some(app) = app.as_ref() {
+                        let _ = app.emit(
+                            "reading",
+                            serde_json::json!({
+                                "index": p.index,
+                                "total": p.total,
+                                "generation": p.generation,
+                            }),
+                        );
+                    }
+                }) {
+                    Ok(mut l) => {
+                        l.set_speed(s.speed);
+                        *guard = Some(l);
+                    }
+                    Err(e) => eprintln!("lector: engine failed to start: {e}"),
                 }
-                Err(e) => eprintln!("lector: engine failed to start: {e}"),
-            },
+            }
         }
     }
 
@@ -286,6 +305,9 @@ fn main() {
             api::snapshot,
             api::level,
             api::speak,
+            api::chunk_preview,
+            api::pause,
+            api::resume,
             api::stop,
             api::choose_voice,
             api::set_speed,
@@ -302,6 +324,7 @@ fn main() {
 
             let state = Arc::new(App {
                 lector: Mutex::new(None),
+                app: Mutex::new(Some(app.handle().clone())),
                 settings: Mutex::new(settings),
                 data_dir,
                 installing: Mutex::new(HashSet::new()),

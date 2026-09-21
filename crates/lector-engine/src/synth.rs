@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -57,18 +57,33 @@ pub enum Command {
     Shutdown,
 }
 
+/// Where in the current utterance the voice has actually reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Position {
+    pub generation: u64,
+    /// Index of the chunk now audible.
+    pub index: usize,
+    pub total: usize,
+}
+
 pub struct Handle {
     tx: Sender<Command>,
     generation: Arc<AtomicU64>,
     speaking: Arc<AtomicBool>,
     pub state: Arc<PlaybackState>,
+    /// How many chunks the current job has, for reporting progress.
+    total: Arc<AtomicUsize>,
 }
 
 impl Handle {
     /// Interrupts whatever is playing and speaks these chunks.
     pub fn speak(&self, voice: Voice, chunks: Vec<String>, speed: f32) {
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        self.total.store(chunks.len(), Ordering::Release);
+        // Silence now. The counters are reset by the actor instead, once it has
+        // stopped pushing the job this is interrupting.
         self.state.request_flush();
+        self.state.set_paused(false);
         let _ = self.tx.send(Command::Speak(Box::new(SpeakJob {
             generation,
             voice,
@@ -80,7 +95,24 @@ impl Handle {
     pub fn stop(&self) {
         self.generation.fetch_add(1, Ordering::AcqRel);
         self.state.request_flush();
+        self.state.set_paused(false);
         let _ = self.tx.send(Command::Stop);
+    }
+
+    /// Freezes playback without discarding anything.
+    ///
+    /// Costs nothing on the synthesis side: the ring stops draining, so the
+    /// producer parks on the backpressure it already has.
+    pub fn pause(&self) {
+        self.state.set_paused(true);
+    }
+
+    pub fn resume(&self) {
+        self.state.set_paused(false);
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.state.is_paused()
     }
 
     pub fn is_speaking(&self) -> bool {
@@ -94,13 +126,34 @@ impl Handle {
 
 impl Drop for Handle {
     fn drop(&mut self) {
+        // Bump the generation first. An actor parked in `push_all` against a
+        // full ring -- which a pause can cause indefinitely -- never returns to
+        // `recv()`, so a bare Shutdown would leak the thread. The generation
+        // change is what unwinds it.
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        self.state.request_flush();
+        self.state.set_paused(false);
         let _ = self.tx.send(Command::Shutdown);
     }
 }
 
+/// How often the cursor thread checks whether the voice has reached a mark.
+///
+/// Well under the 150 ms sentence gap, so a highlight can never be late enough
+/// to read as lag, and the thread costs nothing because it only wakes to
+/// compare two integers.
+const CURSOR_TICK: Duration = Duration::from_millis(25);
+
 /// Starts the actor. Returns once the audio device is open and the model is
 /// warm, so the first hotkey press does not pay the ~820 ms load.
-pub fn spawn(voice: Voice) -> Result<Handle, String> {
+///
+/// `on_position` is called from a dedicated thread whenever the chunk being
+/// heard changes -- never from the audio callback, which must not allocate, and
+/// never from the synthesis thread, which sits inside C++ for seconds at a time.
+pub fn spawn(
+    voice: Voice,
+    on_position: Option<Box<dyn Fn(Position) + Send + 'static>>,
+) -> Result<Handle, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let generation = Arc::new(AtomicU64::new(0));
     let speaking = Arc::new(AtomicBool::new(false));
@@ -121,11 +174,48 @@ pub fn spawn(voice: Voice) -> Result<Handle, String> {
         .map_err(|e| e.to_string())?;
 
     let state = ready_rx.recv().map_err(|e| e.to_string())??;
+    let total = Arc::new(AtomicUsize::new(0));
+
+    if let Some(on_position) = on_position {
+        let (state_c, gen_c, total_c) = (state.clone(), generation.clone(), total.clone());
+        std::thread::Builder::new()
+            .name("lector-cursor".into())
+            .spawn(move || {
+                let mut last: Option<Position> = None;
+                loop {
+                    std::thread::sleep(CURSOR_TICK);
+                    // The Handle owning this generation is gone; so is the app.
+                    if Arc::strong_count(&gen_c) == 1 {
+                        return;
+                    }
+                    if state_c.is_paused() {
+                        continue;
+                    }
+                    let generation = gen_c.load(Ordering::Acquire);
+                    if let Some(m) = state_c.take_reached(generation) {
+                        let p = Position {
+                            generation,
+                            index: m.index,
+                            total: total_c.load(Ordering::Acquire),
+                        };
+                        // Only on change: roughly once every few seconds of
+                        // reading, rather than forty times a second.
+                        if last != Some(p) {
+                            last = Some(p);
+                            on_position(p);
+                        }
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+    }
+
     Ok(Handle {
         tx,
         generation,
         speaking,
         state,
+        total,
     })
 }
 
@@ -248,6 +338,13 @@ impl Actor {
 
     fn speak(&mut self, generation: u64, chunks: &[String], speed: f32) {
         self.out.borrow_mut().resampler.reset();
+
+        // Reset the frame counters here rather than in `Handle::speak`. Only
+        // this thread knows it has finished pushing the job being interrupted;
+        // resetting any earlier lets that tail land after the reset and offset
+        // every mark in this utterance by its length.
+        self.state.flush_and_settle();
+
         for (i, chunk) in chunks.iter().enumerate() {
             if self.generation.load(Ordering::Acquire) != generation {
                 return;
@@ -255,6 +352,9 @@ impl Actor {
             if i > 0 {
                 self.push_silence(SENTENCE_GAP);
             }
+            // Recorded after the gap and before synthesis, so the highlight
+            // moves when the voice starts rather than during the pause.
+            self.state.mark(generation, i);
             self.synthesize(generation, chunk, speed);
         }
     }

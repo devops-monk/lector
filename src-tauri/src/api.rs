@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use lector_engine::catalog;
+use lector_text::SanitizeOptions;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -40,6 +41,7 @@ pub struct Snapshot {
     pub speed: f32,
     pub ready: bool,
     pub speaking: bool,
+    pub paused: bool,
     pub accessibility: bool,
     pub hotkey: String,
     pub voice_count: usize,
@@ -53,9 +55,13 @@ pub struct Snapshot {
 pub fn snapshot(state: State<Arc<App>>) -> Snapshot {
     let s = state.settings.lock().unwrap().clone();
     let installing = state.installing.lock().unwrap().clone();
-    let (ready, speaking) = {
+    let (ready, speaking, paused) = {
         let l = state.lector.lock().unwrap();
-        (l.is_some(), l.as_ref().is_some_and(|l| l.is_speaking()))
+        (
+            l.is_some(),
+            l.as_ref().is_some_and(|l| l.is_speaking()),
+            l.as_ref().is_some_and(|l| l.is_paused()),
+        )
     };
 
     let models: Vec<ModelInfo> = catalog::CATALOG
@@ -89,6 +95,7 @@ pub fn snapshot(state: State<Arc<App>>) -> Snapshot {
         speed: s.speed,
         ready,
         speaking,
+        paused,
         accessibility: crate::selection::has_accessibility(false),
         hotkey: "⌥⇧Space".into(),
     }
@@ -116,6 +123,31 @@ pub fn speak(text: String, state: State<Arc<App>>) {
 #[tauri::command]
 pub fn stop(state: State<Arc<App>>) {
     state.stop();
+}
+
+/// The chunks the engine will produce for this text.
+///
+/// The window must never split text itself. Two splitters would be two sources
+/// of truth, and the moment they disagreed the highlight would land on the
+/// wrong words -- a bug that looks like a timing problem and is not one. This
+/// calls exactly what the speak path calls, with the same options.
+#[tauri::command]
+pub fn chunk_preview(text: String) -> Vec<String> {
+    lector_text::prepare(&text, SanitizeOptions::READING, true)
+}
+
+#[tauri::command]
+pub fn pause(state: State<Arc<App>>) {
+    if let Some(l) = state.lector.lock().unwrap().as_ref() {
+        l.pause();
+    }
+}
+
+#[tauri::command]
+pub fn resume(state: State<Arc<App>>) {
+    if let Some(l) = state.lector.lock().unwrap().as_ref() {
+        l.resume();
+    }
 }
 
 #[tauri::command]

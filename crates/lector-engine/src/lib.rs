@@ -14,7 +14,7 @@ pub mod voice;
 
 use std::path::Path;
 
-pub use synth::Handle;
+pub use synth::{Handle, Position};
 pub use voice::{Engine, Voice};
 
 use lector_text::SanitizeOptions;
@@ -33,13 +33,30 @@ impl Lector {
         Self::with_voice(Voice::from_dir(model_dir, 0)?)
     }
 
+    /// Starts with a voice already chosen and a callback for reading position.
+    ///
+    /// The callback fires when the chunk being *heard* changes, which is not
+    /// the same as the chunk being synthesized -- synthesis runs several chunks
+    /// ahead, so reporting there would put a highlight ahead of the voice.
+    pub fn with_voice_and_position(
+        voice: Voice,
+        on_position: impl Fn(Position) + Send + 'static,
+    ) -> Result<Self, String> {
+        let handle = synth::spawn(voice.clone(), Some(Box::new(on_position)))?;
+        Ok(Self {
+            handle,
+            voice,
+            speed: 1.0,
+        })
+    }
+
     /// Starts with a voice already chosen.
     ///
     /// Prefer this over `new` followed by `set_voice`: that pair loads the model
     /// twice, once for the default and again when the choice turns out to
     /// differ, and each load is most of a second.
     pub fn with_voice(voice: Voice) -> Result<Self, String> {
-        let handle = synth::spawn(voice.clone())?;
+        let handle = synth::spawn(voice.clone(), None)?;
         Ok(Self {
             handle,
             voice,
@@ -77,6 +94,19 @@ impl Lector {
     /// Stops immediately, mid-sentence.
     pub fn stop(&self) {
         self.handle.stop();
+    }
+
+    /// Freezes playback, keeping the position and the audio already generated.
+    pub fn pause(&self) {
+        self.handle.pause();
+    }
+
+    pub fn resume(&self) {
+        self.handle.resume();
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.handle.is_paused()
     }
 
     pub fn is_speaking(&self) -> bool {
