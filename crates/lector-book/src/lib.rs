@@ -7,6 +7,7 @@
 //! Everything here converts into one shape, [`Book`], so adding a format later
 //! never changes the reader.
 
+pub mod catalogue;
 pub mod epub;
 pub mod html;
 pub mod library;

@@ -29,6 +29,7 @@
           <input id="url" type="url" placeholder="…or paste an article's web address"
                  autocomplete="off" spellcheck="false">
         </form>
+        <button id="browsebtn" class="get wide">Find free books…</button>
         <div id="books"></div>
       </div>
     </aside>
@@ -55,6 +56,17 @@
       <div id="pane">
         <div id="level" aria-hidden="true"><i></i></div>
         <div id="chapters" hidden></div>
+        <div id="browse" hidden>
+          <div id="browsehead">
+            <form id="browseform">
+              <input id="bq" type="search" placeholder="Search Project Gutenberg…"
+                     autocomplete="off" spellcheck="false">
+            </form>
+            <div id="browsenote" class="chapby"></div>
+          </div>
+          <div id="results"></div>
+        </div>
+
         <div id="preview" hidden>
           <div id="previewhead">
             <div>

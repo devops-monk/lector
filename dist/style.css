@@ -363,3 +363,31 @@ button.primary.stop { background: var(--ink-2); }
   white-space: pre-wrap; word-break: break-word;
 }
 #previewfoot { display: flex; gap: 10px; padding-top: 12px; }
+
+/* ---------- browsing free books ---------- */
+
+#browse { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 14px 16px; }
+#browse[hidden] { display: none; }
+#browsehead { margin-bottom: 10px; }
+#bq {
+  width: 100%; padding: 8px 11px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--paper); color: var(--ink); font: inherit; font-size: 14px;
+}
+#bq:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+#browsenote { margin-top: 8px; }
+
+#results { flex: 1; min-height: 0; overflow-y: auto; }
+
+.result {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 8px; border-radius: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.result:hover { background: var(--paper-3); }
+.result .get { flex: none; min-width: 92px; text-align: center; }
+.result .get:disabled { opacity: .6; cursor: default; }
+.resultnote {
+  color: var(--ink-3); font-size: 11px; margin-top: 3px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}

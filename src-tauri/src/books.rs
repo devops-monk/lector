@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use lector_book::catalogue::{self, Listing};
 use lector_book::{epub, pdf, text, web, Book, Shelf};
 use lector_text::SanitizeOptions;
 use serde::Serialize;
@@ -148,6 +149,56 @@ pub fn import_url(app: AppHandle, url: String) {
             let source = serde_json::to_vec(&book).unwrap_or_default();
             state.library.add(&book, &source)
         });
+        match result {
+            Ok(row) => {
+                let _ = app.emit("imported", &row);
+            }
+            Err(e) => fail(&app, e),
+        }
+    });
+}
+
+/// Searches the free catalogues.
+///
+/// An empty query is not an empty result: it is the Standard Ebooks shelf,
+/// which is what a reader who has not typed anything should be looking at.
+#[tauri::command]
+pub fn browse(query: String) -> Result<Vec<Listing>, String> {
+    if query.trim().is_empty() {
+        catalogue::new_releases()
+    } else {
+        catalogue::search(&query)
+    }
+}
+
+/// Downloads a listing and adds it to the library.
+#[tauri::command]
+pub fn get_book(app: AppHandle, listing: Listing) {
+    std::thread::spawn(move || {
+        let state = app.state::<Arc<App>>().inner().clone();
+        let id = listing.id.clone();
+
+        // Throttled to whole percents: a book arrives in 64 KB reads, and an
+        // event per read floods the channel to redraw the same bar.
+        let mut last = 0u64;
+        let result = catalogue::fetch(&listing, |got, total| {
+            let pct = (got * 100).checked_div(total).unwrap_or(0);
+            if pct != last {
+                last = pct;
+                let _ = app.emit(
+                    "progress",
+                    serde_json::json!({
+                        "id": id, "received": got, "total": total, "phase": "Downloading",
+                    }),
+                );
+            }
+        })
+        .and_then(|(book, bytes)| state.library.add(&book, &bytes));
+
+        let _ = app.emit(
+            "progress",
+            serde_json::json!({ "id": listing.id, "phase": "Done" }),
+        );
         match result {
             Ok(row) => {
                 let _ = app.emit("imported", &row);

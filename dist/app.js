@@ -180,6 +180,7 @@ let chunks = [];
 
 function showFollow(cs) {
   $("preview").hidden = true;
+  $("browse").hidden = true;
   chunks = cs;
   const box = $("follow");
   box.innerHTML = "";
@@ -433,6 +434,75 @@ $("urlform").onsubmit = (e) => {
   });
 };
 
+// ---- free books ----------------------------------------------------------
+//
+// The second and last thing in Lector that reaches the network, after model
+// downloads. It fetches in: a search goes out, nothing about what is being
+// read ever does.
+
+let results = [];
+
+$("browsebtn").onclick = () => openBrowse("");
+
+async function openBrowse(query) {
+  book = null;
+  $("browse").hidden = false;
+  $("chapters").hidden = true;
+  $("text").hidden = true;
+  $("follow").hidden = true;
+  $("preview").hidden = true;
+  $("back").hidden = true;
+  $("resume").hidden = true;
+  $("results").innerHTML = "";
+  $("browsenote").textContent = query ? "Searching…" : "Loading recent releases…";
+  try {
+    results = await invoke("browse", { query });
+    $("browsenote").textContent = query
+      ? `${results.length} result${results.length === 1 ? "" : "s"} from Project Gutenberg`
+      : "Recently released by Standard Ebooks — carefully typeset public-domain books.";
+    renderResults();
+  } catch (e) {
+    $("browsenote").textContent = String(e);
+  }
+}
+
+$("browseform").onsubmit = (e) => {
+  e.preventDefault();
+  openBrowse($("bq").value.trim());
+};
+
+function renderResults() {
+  const box = $("results");
+  box.innerHTML = "";
+  if (!results.length) {
+    box.append(el("div", "empty", "Nothing found. Try an author or a title."));
+    return;
+  }
+  for (const r of results) {
+    const row = el("div", "result");
+    const meta = el("div", "bookmeta");
+    meta.append(el("div", "booktitle", r.title));
+    const by = [r.author, r.source].filter(Boolean).join(" · ");
+    meta.append(el("div", "bookby", by));
+    if (r.note) meta.append(el("div", "resultnote", r.note));
+
+    const btn = el("button", "get", r.bytes ? `Get · ${Math.round(r.bytes / 1024)} KB` : "Get");
+    btn.onclick = () => {
+      btn.disabled = true;
+      btn.textContent = "0%";
+      downloading.set(r.id, btn);
+      invoke("get_book", { listing: r });
+    };
+    row.append(meta, btn);
+    box.append(row);
+  }
+}
+
+// Buttons awaiting a download, keyed by listing id -- the same key the
+// progress events carry, so a model download and a book download can share one
+// listener without either guessing which is which.
+const downloading = new Map();
+
 // ---- the PDF preview -----------------------------------------------------
 //
 // A PDF is not imported until its extraction has been looked at. Reading order
@@ -512,6 +582,7 @@ function showChapters() {
   $("text").hidden = true;
   $("follow").hidden = true;
   $("preview").hidden = true;
+  $("browse").hidden = true;
   $("back").hidden = true;
   $("resume").hidden = true;
 }
@@ -540,7 +611,9 @@ $("back").onclick = async () => {
 listen("imported", (e) => {
   refreshLibrary();
   showTab("library");
-  openBook(e.payload.id);
+  // Browsing stays put: downloading one book is usually the first of several,
+  // and jumping into the reader would throw away the search that found it.
+  if ($("browse").hidden) openBook(e.payload.id);
 });
 listen("library", refreshLibrary);
 
@@ -561,6 +634,17 @@ $("text").onkeydown = (e) => {
 
 listen("changed", refresh);
 listen("progress", (e) => {
+  const btn = downloading.get(e.payload.id);
+  if (btn) {
+    if (e.payload.phase === "Done") {
+      downloading.delete(e.payload.id);
+      btn.disabled = false;
+      btn.textContent = "Get";
+    } else if (e.payload.total) {
+      btn.textContent = `${Math.round((e.payload.received / e.payload.total) * 100)}%`;
+    }
+    return;
+  }
   progress.set(e.payload.id, e.payload);
   if (e.payload.phase === "Done") {
     progress.delete(e.payload.id);
