@@ -1,16 +1,38 @@
-//! Imports an EPUB and prints what would be read.
+//! Imports any supported document and prints what would be read.
 //!
-//!   cargo run -p lector-book --example import -- book.epub [chapter]
+//!   cargo run -p lector-book --example import -- book.epub
+//!   cargo run -p lector-book --example import -- notes.md 2
+//!   cargo run -p lector-book --example import -- https://example.com/article
 //!
 //! The point is to see the extraction before hearing it: a bad strip is obvious
-//! in a second on screen and takes thirty seconds to notice by ear.
+//! in a second on screen and takes thirty seconds to notice by ear. For PDF
+//! that is not a convenience but the actual import path -- see `pdf::preview`.
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let path = args.next().expect("usage: import <book.epub> [chapter]");
+    let arg = args.next().expect("usage: import <path or url> [chapter]");
     let which: Option<usize> = args.next().and_then(|s| s.parse().ok());
 
-    let book = lector_book::epub::import(std::path::Path::new(&path)).expect("import failed");
+    let book = if arg.starts_with("http") {
+        lector_book::web::import(&arg).expect("fetch failed")
+    } else {
+        let p = std::path::Path::new(&arg);
+        match p
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "pdf" => {
+                let text = lector_book::pdf::preview(p).expect("extraction failed");
+                lector_book::pdf::import(p, &text).expect("import failed")
+            }
+            "epub" => lector_book::epub::import(p).expect("import failed"),
+            _ => lector_book::text::import(p).expect("import failed"),
+        }
+    };
+
     println!("{} — {}", book.title, book.author);
     println!(
         "{} chapters, {} words, {} warnings\n",

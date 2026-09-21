@@ -10,6 +10,9 @@
 pub mod epub;
 pub mod html;
 pub mod library;
+pub mod pdf;
+pub mod text;
+pub mod web;
 
 pub use library::{Library, Progress, Shelf};
 

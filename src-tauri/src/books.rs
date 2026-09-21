@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use lector_book::{epub, Shelf};
+use lector_book::{epub, pdf, text, web, Book, Shelf};
 use lector_text::SanitizeOptions;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -41,18 +41,22 @@ pub fn library(state: State<Arc<App>>) -> Vec<Shelf> {
     state.library.shelf()
 }
 
-/// Imports a book chosen from a file dialog.
+/// Imports a document chosen from a file dialog.
 ///
 /// The picker is opened from Rust rather than the webview: the webview's file
 /// input hands back a `File`, not a path, and the importer needs the bytes of
-/// the real file to derive the book's id from them.
+/// the real file to derive the document's id from them.
+///
+/// PDF does not import here. It goes through a preview the reader has to
+/// accept first, because PDF extraction is a reconstruction and a bad one
+/// narrates confident nonsense. See [`preview_pdf`].
 #[tauri::command]
 pub fn import_book(app: AppHandle) {
     std::thread::spawn(move || {
         let Some(file) = app
             .dialog()
             .file()
-            .add_filter("Ebooks", &["epub"])
+            .add_filter("Documents", &["epub", "txt", "md", "markdown", "pdf"])
             .blocking_pick_file()
         else {
             return; // cancelled, which is not an error
@@ -61,23 +65,103 @@ pub fn import_book(app: AppHandle) {
             return;
         };
 
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+
+        if ext == "pdf" {
+            match pdf::preview(&path) {
+                Ok(text) => {
+                    let _ = app.emit(
+                        "pdf_preview",
+                        serde_json::json!({
+                            "path": path.to_string_lossy(),
+                            "name": path.file_stem().map(|n| n.to_string_lossy().to_string()),
+                            "text": text,
+                        }),
+                    );
+                }
+                Err(e) => fail(&app, e),
+            }
+            return;
+        }
+
         let state = app.state::<Arc<App>>().inner().clone();
-        let _ = app.emit("importing", serde_json::json!({ "name": path.file_name().map(|n| n.to_string_lossy().to_string()) }));
+        let imported = match ext.as_str() {
+            "epub" => std::fs::read(&path)
+                .map_err(|e| format!("cannot read that file: {e}"))
+                .and_then(|bytes| epub::from_bytes(&bytes).map(|b| (b, bytes))),
+            "txt" | "md" | "markdown" => text::import(&path).and_then(|b| {
+                std::fs::read(&path)
+                    .map(|raw| (b, raw))
+                    .map_err(|e| e.to_string())
+            }),
+            other => Err(format!("Lector cannot read .{other} files")),
+        };
 
-        let result = std::fs::read(&path)
-            .map_err(|e| format!("cannot read that file: {e}"))
-            .and_then(|bytes| epub::from_bytes(&bytes).map(|b| (b, bytes)))
-            .and_then(|(book, bytes)| state.library.add(&book, &bytes));
+        match imported.and_then(|(book, bytes)| state.library.add(&book, &bytes)) {
+            Ok(row) => {
+                let _ = app.emit("imported", &row);
+            }
+            Err(e) => fail(&app, e),
+        }
+    });
+}
 
+/// Adds a PDF whose extraction has been shown and accepted.
+///
+/// The text comes back from the window rather than being re-extracted, so what
+/// is stored is exactly what was reviewed.
+#[tauri::command]
+pub fn accept_pdf(app: AppHandle, path: String, text: String) {
+    std::thread::spawn(move || {
+        let state = app.state::<Arc<App>>().inner().clone();
+        let p = std::path::PathBuf::from(&path);
+        let result = pdf::import(&p, &text)
+            .and_then(|book| {
+                std::fs::read(&p)
+                    .map(|raw| (book, raw))
+                    .map_err(|e| e.to_string())
+            })
+            .and_then(|(book, raw)| state.library.add(&book, &raw));
         match result {
             Ok(row) => {
                 let _ = app.emit("imported", &row);
             }
-            Err(e) => {
-                let _ = app.emit("failed", serde_json::json!({"id": "import", "error": e}));
-            }
+            Err(e) => fail(&app, e),
         }
     });
+}
+
+/// Imports a web article.
+///
+/// One of only two things in Lector that reach the network, the other being
+/// model downloads. It fetches in; nothing about the document goes out.
+#[tauri::command]
+pub fn import_url(app: AppHandle, url: String) {
+    std::thread::spawn(move || {
+        let state = app.state::<Arc<App>>().inner().clone();
+        let result = web::import(url.trim()).and_then(|book: Book| {
+            // A page has no file to keep, so the article's own text is what is
+            // stored beside it -- enough to re-import it without the network.
+            let source = serde_json::to_vec(&book).unwrap_or_default();
+            state.library.add(&book, &source)
+        });
+        match result {
+            Ok(row) => {
+                let _ = app.emit("imported", &row);
+            }
+            Err(e) => fail(&app, e),
+        }
+    });
+}
+
+fn fail(app: &AppHandle, error: String) {
+    let _ = app.emit(
+        "failed",
+        serde_json::json!({"id": "import", "error": error}),
+    );
 }
 
 /// Opens a book for reading. Does not start the voice.

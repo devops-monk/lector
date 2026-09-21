@@ -25,6 +25,10 @@
 
       <div id="librarypane" hidden>
         <button id="import" class="get wide">Add a book…</button>
+        <form id="urlform">
+          <input id="url" type="url" placeholder="…or paste an article's web address"
+                 autocomplete="off" spellcheck="false">
+        </form>
         <div id="books"></div>
       </div>
     </aside>
@@ -51,6 +55,21 @@
       <div id="pane">
         <div id="level" aria-hidden="true"><i></i></div>
         <div id="chapters" hidden></div>
+        <div id="preview" hidden>
+          <div id="previewhead">
+            <div>
+              <div class="chaptitle">Check this before adding it</div>
+              <div class="chapby">PDFs store positioned glyphs, not sentences. Read a little of
+                this — if the columns are interleaved or the words are broken up, it will sound
+                exactly as wrong as it looks.</div>
+            </div>
+          </div>
+          <pre id="previewtext"></pre>
+          <div id="previewfoot">
+            <button id="previewadd" class="primary">Add it</button>
+            <button id="previewno" class="ghost">Discard</button>
+          </div>
+        </div>
         <div id="follow" hidden></div>
         <textarea id="text" spellcheck="false"
           placeholder="Type or paste anything here, then press Speak.&#10;&#10;Or select text in any other app and press ⌥⇧Space."></textarea>

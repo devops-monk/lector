@@ -56,10 +56,59 @@ pub struct Extracted {
     pub errors: usize,
 }
 
-/// Elements whose entire subtree is silent.
-const SKIP: &[&str] = &[
-    "script", "style", "head", "svg", "figure", "table", "rt", "rp",
+/// Elements whose entire subtree is silent, everywhere.
+const SKIP: &[&str] = &["script", "style", "head", "svg", "rt", "rp"];
+
+/// Also silent in a book.
+///
+/// Data tables and figures read terribly aloud -- a table becomes a stream of
+/// unrelated numbers. On the web a table is as often layout as data, and
+/// skipping those would skip the page, so this set is book-only.
+const SKIP_BOOK: &[&str] = &["figure", "table"];
+
+/// Elements that never close, because HTML says they do not.
+///
+/// Written without a slash in HTML5 -- `<meta charset="utf-8">` -- and
+/// therefore parsed as *opening* tags by an XML reader. Counting them into the
+/// depth is not a cosmetic error: a `<head>` containing three `<meta>` tags
+/// never returns to the depth its skip began at, so everything after it stays
+/// skipped and the document extracts as nothing at all. EPUB's XHTML
+/// self-closes them, which is why this only shows up on the web.
+const VOID: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
 ];
+
+/// Also silent on a web page.
+///
+/// An ebook has no navigation to skip, so these would be pointless there; a web
+/// page is mostly these. Naming them is the difference between narrating an
+/// article and narrating a website -- the menus, the cookie notice, the share
+/// buttons and the comments all read as prose otherwise.
+const SKIP_WEB: &[&str] = &[
+    "nav", "header", "footer", "aside", "form", "button", "select", "label", "video", "audio",
+    "iframe", "noscript", "dialog", "menu",
+];
+
+/// How to read one document.
+#[derive(Clone, Copy, Default)]
+pub struct Options<'a> {
+    /// Restrict the text to this element's subtree, when the document has one.
+    ///
+    /// Used to find the article inside a page. If the element is absent the
+    /// whole document is read, because a page with no `article` or `main` is
+    /// usually a page whose body *is* the article.
+    pub within: Option<&'a str>,
+    /// Skip the furniture a web page carries and an ebook does not.
+    pub web: bool,
+}
+
+impl Options<'_> {
+    pub const BOOK: Self = Self {
+        within: None,
+        web: false,
+    };
+}
 
 /// Elements that end a line of speech. Paragraph structure is most of what
 /// sentence splitting has to work with, so it has to survive the strip.
@@ -98,6 +147,15 @@ fn is(tag: &str, set: &[&str]) -> bool {
     set.iter().any(|t| t.eq_ignore_ascii_case(tag))
 }
 
+/// The skip set that depends on what kind of document this is.
+fn skipped_here(tag: &str, opts: &Options) -> bool {
+    if opts.web {
+        is(tag, SKIP_WEB)
+    } else {
+        is(tag, SKIP_BOOK)
+    }
+}
+
 /// True if this element carries an `epub:type` naming it a note.
 ///
 /// Matched on the local name so both `epub:type` and a namespace-stripped
@@ -125,6 +183,16 @@ fn is_marker(s: &str) -> bool {
 
 /// Strips one XHTML file down to what should be spoken.
 pub fn to_text(xhtml: &str) -> Extracted {
+    to_text_with(xhtml, Options::BOOK)
+}
+
+/// As [`to_text`], with control over what counts as content.
+pub fn to_text_with(xhtml: &str, opts: Options) -> Extracted {
+    // Restricting to an element is a two-pass job: the first pass finds out
+    // whether the document has one at all, because a page without `article`
+    // must be read whole rather than read as nothing.
+    let within = opts.within.filter(|tag| has_element(xhtml, tag));
+
     let mut reader = Reader::from_str(xhtml);
     let cfg = reader.config_mut();
     // Both are the recovery: real EPUB 2 files mismatch end tags and use HTML
@@ -138,27 +206,56 @@ pub fn to_text(xhtml: &str) -> Extracted {
     let mut raw_anchors: Vec<(String, usize)> = Vec::new();
     let mut errors = 0usize;
     let mut depth = 0usize;
-    // Depth at which the current skipped subtree began. Tracking the depth
-    // rather than a flag is what makes nested skips -- a table inside an aside
-    // -- close in the right place.
-    let mut skip_from: Option<usize> = None;
+    // Depth at which the current skipped subtree began, and the element that
+    // began it. The depth is what makes nested skips -- a table inside an aside
+    // -- close in the right place; the name is the escape hatch for when
+    // something inside the skipped subtree has already thrown the depth off, as
+    // unbalanced markup inside a `<script>` routinely does. Either one closing
+    // it is enough, and a skip that never closes swallows the whole document.
+    let mut skip_from: Option<(usize, String)> = None;
     // `sup` is collected aside rather than emitted, because whether it is
     // speech or a footnote marker is only knowable once it has ended.
     let mut sup: Option<String> = None;
     let mut last_pos = 0u64;
+    // Depth of the element the text is restricted to, if any. Outside it
+    // everything is skipped, including elements that would otherwise be block
+    // breaks.
+    let mut inside: Option<usize> = None;
 
     loop {
         match reader.read_event() {
             Ok(Event::Eof) => break,
             Ok(Event::Start(e)) => {
                 depth += 1;
-                if skip_from.is_none() {
-                    note_anchor(&e, out.len(), &mut raw_anchors);
+                if let (Some(want), None) = (within, inside) {
+                    if e.local_name().as_ref().eq_ignore_ascii_case(want) {
+                        inside = Some(depth);
+                    }
+                }
+                if within.is_some() && inside.is_none() {
+                    continue;
                 }
                 let tag = e.local_name();
                 let tag = tag.as_ref();
-                if skip_from.is_none() && (is(tag, SKIP) || is_note(&e)) {
-                    skip_from = Some(depth);
+                // A void element opened and closed in one event, whatever the
+                // markup claims. Letting it count toward the depth is what
+                // breaks every page that is HTML rather than XHTML.
+                if is(tag, VOID) {
+                    depth -= 1;
+                    if skip_from.is_none() {
+                        note_anchor(&e, out.len(), &mut raw_anchors);
+                        if is(tag, BLOCK) {
+                            out.push('\n');
+                        }
+                    }
+                    continue;
+                }
+                if skip_from.is_none() {
+                    note_anchor(&e, out.len(), &mut raw_anchors);
+                }
+                if skip_from.is_none() && (is(tag, SKIP) || skipped_here(tag, &opts) || is_note(&e))
+                {
+                    skip_from = Some((depth, tag.to_ascii_lowercase()));
                 } else if skip_from.is_none() {
                     if tag.eq_ignore_ascii_case("sup") {
                         sup = Some(String::new());
@@ -168,11 +265,23 @@ pub fn to_text(xhtml: &str) -> Extracted {
                 }
             }
             Ok(Event::End(e)) => {
+                if inside == Some(depth) {
+                    inside = None;
+                    depth = depth.saturating_sub(1);
+                    continue;
+                }
+                if within.is_some() && inside.is_none() {
+                    depth = depth.saturating_sub(1);
+                    continue;
+                }
                 let tag = e.local_name();
                 let tag = tag.as_ref();
-                if skip_from == Some(depth) {
+                let closes = skip_from
+                    .as_ref()
+                    .is_some_and(|(at, name)| *at == depth || name.eq_ignore_ascii_case(tag));
+                if closes {
                     skip_from = None;
-                } else if tag.eq_ignore_ascii_case("sup") {
+                } else if skip_from.is_none() && tag.eq_ignore_ascii_case("sup") {
                     if let Some(s) = sup.take() {
                         if !is_marker(&s) {
                             out.push_str(&s);
@@ -182,6 +291,9 @@ pub fn to_text(xhtml: &str) -> Extracted {
                 depth = depth.saturating_sub(1);
             }
             Ok(Event::Empty(e)) => {
+                if within.is_some() && inside.is_none() {
+                    continue;
+                }
                 if skip_from.is_none() {
                     note_anchor(&e, out.len(), &mut raw_anchors);
                     if is(e.local_name().as_ref(), BLOCK) {
@@ -190,7 +302,7 @@ pub fn to_text(xhtml: &str) -> Extracted {
                 }
             }
             Ok(Event::Text(e)) => {
-                if skip_from.is_some() {
+                if skip_from.is_some() || (within.is_some() && inside.is_none()) {
                     continue;
                 }
                 // html_content, not the XML unescape: EPUB XHTML is full of
@@ -218,7 +330,7 @@ pub fn to_text(xhtml: &str) -> Extracted {
                 }
             }
             Ok(Event::GeneralRef(r)) => {
-                if skip_from.is_some() {
+                if skip_from.is_some() || (within.is_some() && inside.is_none()) {
                     continue;
                 }
                 let Some(text) = entity(&r) else { continue };
@@ -250,6 +362,19 @@ pub fn to_text(xhtml: &str) -> Extracted {
         anchors,
         errors,
     }
+}
+
+/// Whether a document contains an element by this name at all.
+///
+/// A string scan rather than a parse: it decides only whether to restrict the
+/// real pass, and being wrong costs a whole-document read, which is the
+/// fallback anyway.
+fn has_element(xhtml: &str, tag: &str) -> bool {
+    let open = format!("<{tag}");
+    xhtml
+        .as_bytes()
+        .windows(open.len())
+        .any(|w| w.eq_ignore_ascii_case(open.as_bytes()))
 }
 
 /// Records an element's `id`, if it has one, against where its content starts.
@@ -404,6 +529,68 @@ mod tests {
             "<body><p>Text.</p><table><tr><td>1</td><td>2</td></tr></table><p>End.</p></body>",
         );
         assert_eq!(x.text, "Text.\nEnd.");
+    }
+
+    #[test]
+    fn unbalanced_markup_inside_a_skipped_element_does_not_swallow_the_rest() {
+        // A script containing something that parses as an unclosed tag leaves
+        // the depth permanently off. Matching the closing name recovers it;
+        // without that, every page with a comparison in its JavaScript
+        // extracted as nothing.
+        let page = "<html><head><script>if (a<b) { go(); }</script></head>\
+            <body><p>Still readable.</p></body></html>";
+        let x = to_text(page);
+        assert!(x.text.contains("Still readable."), "{:?}", x.text);
+    }
+
+    #[test]
+    fn void_elements_in_the_head_do_not_swallow_the_document() {
+        // HTML5, not XHTML: no slashes. Counting these into the depth left the
+        // head's skip open forever and extracted the page as nothing.
+        let page = "<!DOCTYPE html><html><head><meta charset=\"utf-8\">\
+            <link rel=\"stylesheet\" href=\"x.css\"><title>T</title></head>\
+            <body><p>The page has words after all.</p></body></html>";
+        let x = to_text(page);
+        assert_eq!(x.text, "The page has words after all.");
+    }
+
+    #[test]
+    fn a_web_page_reads_its_article_and_not_its_furniture() {
+        let page = "<body><nav><a href=\"/\">Home</a><a href=\"/x\">About</a></nav>
+            <header><h1>The Site</h1></header>
+            <article><h2>The Headline</h2><p>The first paragraph.</p></article>
+            <aside><p>Related reading</p></aside>
+            <footer><p>Copyright</p></footer></body>";
+        let x = to_text_with(
+            page,
+            Options {
+                within: Some("article"),
+                web: true,
+            },
+        );
+        assert_eq!(x.text, "The Headline\nThe first paragraph.");
+    }
+
+    #[test]
+    fn a_page_with_no_article_is_read_whole_minus_the_furniture() {
+        let page = "<body><nav><a href=\"/\">Home</a></nav><p>All there is.</p>
+            <footer>Small print</footer></body>";
+        let x = to_text_with(
+            page,
+            Options {
+                within: Some("article"),
+                web: true,
+            },
+        );
+        assert_eq!(x.text, "All there is.");
+    }
+
+    #[test]
+    fn book_options_do_not_skip_a_books_own_headers() {
+        // `header` is furniture on a page and can be a chapter heading in a
+        // book, so the two must not share a skip list.
+        let x = to_text("<body><header><h1>Chapter One</h1></header><p>Text.</p></body>");
+        assert_eq!(x.text, "Chapter One\nText.");
     }
 
     #[test]

@@ -125,15 +125,20 @@ impl Bookmark {
 mod tests {
     use super::*;
 
-    fn tmp() -> PathBuf {
-        let p = std::env::temp_dir().join(format!("lector-bm-{}", std::process::id()));
+    /// A directory of this test's own.
+    ///
+    /// Named per test, not per process: these run in parallel, and a shared
+    /// base that each one cleared on entry meant whichever started second
+    /// deleted the first one's bookmark out from under it.
+    fn tmp(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("lector-bm-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&p);
         p
     }
 
     #[test]
     fn a_position_survives_a_reload() {
-        let dir = tmp();
+        let dir = tmp("reload");
         let bm = Bookmark::load(&dir);
         assert!(bm.get().is_none());
         bm.begin("hello there", 0, 4);
@@ -150,7 +155,7 @@ mod tests {
 
     #[test]
     fn marking_the_same_index_does_not_rewrite() {
-        let dir = tmp().join("same");
+        let dir = tmp("same");
         let bm = Bookmark::load(&dir);
         bm.begin("x", 1, 2);
         let first = *bm.last_write.lock().unwrap();
@@ -161,7 +166,7 @@ mod tests {
 
     #[test]
     fn a_position_within_the_debounce_is_kept_in_memory() {
-        let dir = tmp().join("debounce");
+        let dir = tmp("debounce");
         let bm = Bookmark::load(&dir);
         bm.begin("x", 0, 9);
         bm.mark(5);
@@ -176,7 +181,7 @@ mod tests {
 
     #[test]
     fn clearing_removes_the_file() {
-        let dir = tmp().join("clear");
+        let dir = tmp("clear");
         let bm = Bookmark::load(&dir);
         bm.begin("x", 3, 9);
         bm.clear();

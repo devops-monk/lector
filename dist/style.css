@@ -338,3 +338,28 @@ button.primary.stop { background: var(--ink-2); }
 }
 #back[hidden] { display: none; }
 #back:hover { color: var(--accent); background: var(--paper-3); }
+
+#urlform { margin: 0 12px 10px; }
+#url {
+  width: 100%; padding: 6px 9px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--paper); color: var(--ink); font: inherit; font-size: 12px;
+}
+#url:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* ---------- the PDF preview ---------- */
+
+#preview { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 14px 16px; }
+#preview[hidden] { display: none; }
+#previewhead { margin-bottom: 12px; }
+
+/* Monospace on purpose: interleaved columns and broken words are what this
+   step exists to reveal, and a proportional font hides both. */
+#previewtext {
+  flex: 1; min-height: 0; overflow: auto; margin: 0;
+  padding: 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--paper); color: var(--ink-2);
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; word-break: break-word;
+}
+#previewfoot { display: flex; gap: 10px; padding-top: 12px; }

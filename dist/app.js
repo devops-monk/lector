@@ -179,6 +179,7 @@ $("search").oninput = (e) => {
 let chunks = [];
 
 function showFollow(cs) {
+  $("preview").hidden = true;
   chunks = cs;
   const box = $("follow");
   box.innerHTML = "";
@@ -421,6 +422,50 @@ function renderBooks() {
 
 $("import").onclick = () => invoke("import_book");
 
+$("urlform").onsubmit = (e) => {
+  e.preventDefault();
+  const url = $("url").value.trim();
+  if (!url) return;
+  $("url").value = "";
+  $("url").placeholder = "fetching…";
+  invoke("import_url", { url }).finally(() => {
+    $("url").placeholder = "…or paste an article's web address";
+  });
+};
+
+// ---- the PDF preview -----------------------------------------------------
+//
+// A PDF is not imported until its extraction has been looked at. Reading order
+// is not something a PDF records, so a bad extraction narrates confident
+// nonsense -- obvious on screen in a second, and thirty seconds of puzzlement
+// by ear.
+
+let pending = null;
+
+listen("pdf_preview", (e) => {
+  pending = e.payload;
+  $("previewtext").textContent = e.payload.text;
+  $("preview").hidden = false;
+  $("chapters").hidden = true;
+  $("follow").hidden = true;
+  $("text").hidden = true;
+  $("back").hidden = true;
+});
+
+$("previewadd").onclick = () => {
+  if (!pending) return;
+  invoke("accept_pdf", { path: pending.path, text: pending.text });
+  closePreview();
+};
+$("previewno").onclick = closePreview;
+
+function closePreview() {
+  pending = null;
+  $("preview").hidden = true;
+  if (book) $("chapters").hidden = false;
+  else $("text").hidden = false;
+}
+
 async function openBook(id) {
   const v = await invoke("open_book", { id });
   if (!v) return;
@@ -466,6 +511,7 @@ function showChapters() {
   box.hidden = false;
   $("text").hidden = true;
   $("follow").hidden = true;
+  $("preview").hidden = true;
   $("back").hidden = true;
   $("resume").hidden = true;
 }

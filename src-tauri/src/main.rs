@@ -353,6 +353,8 @@ fn main() {
             api::forget_reading,
             books::library,
             books::import_book,
+            books::accept_pdf,
+            books::import_url,
             books::open_book,
             books::read_chapter,
             books::chapter_text,
