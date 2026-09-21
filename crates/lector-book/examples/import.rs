@@ -25,8 +25,16 @@ fn main() {
             .as_str()
         {
             "pdf" => {
-                let text = lector_book::pdf::preview(p).expect("extraction failed");
-                lector_book::pdf::import(p, &text).expect("import failed")
+                let x = lector_book::pdf::preview(p).expect("extraction failed");
+                if !x.failed_pages.is_empty() {
+                    eprintln!(
+                        "{} of {} pages could not be read: {:?}",
+                        x.failed_pages.len(),
+                        x.total_pages,
+                        &x.failed_pages[..x.failed_pages.len().min(10)]
+                    );
+                }
+                lector_book::pdf::import(p, &x.text).expect("import failed")
             }
             "epub" => lector_book::epub::import(p).expect("import failed"),
             _ => lector_book::text::import(p).expect("import failed"),

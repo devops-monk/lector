@@ -13,19 +13,60 @@
 use crate::{epub, text, Book};
 
 /// Extracts a PDF's text without adding anything to the library.
-pub fn preview(path: &std::path::Path) -> Result<String, String> {
+pub fn preview(path: &std::path::Path) -> Result<Extract, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read that file: {e}"))?;
     from_bytes(&bytes)
 }
 
-fn from_bytes(bytes: &[u8]) -> Result<String, String> {
-    // pdf-extract panics on some malformed files rather than returning an
-    // error. A panic here would take the whole app down on a file the user
-    // merely wanted to look at, so it is caught.
-    let out = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(bytes))
-        .map_err(|_| "that PDF could not be read".to_string())?
-        .map_err(|e| format!("that PDF could not be read: {e}"))?;
-    let text = clean(&out);
+/// What one extraction attempt produced.
+pub struct Extract {
+    pub text: String,
+    /// Pages that could not be read at all.
+    pub failed_pages: Vec<u32>,
+    pub total_pages: u32,
+}
+
+/// Extracts a PDF **one page at a time**.
+///
+/// Not `extract_text_from_mem`, which does the whole document in one call and
+/// therefore loses all of it to any single bad page. pdf-extract indexes the
+/// operands of graphics operators without checking they are there -- a `y`
+/// curve with no operands panics at lib.rs:1824 -- and one malformed path in a
+/// 700-page book takes the book with it. Per page, the same fault costs one
+/// page and the reader is told which.
+///
+/// The panics are caught rather than avoided because they are in a dependency
+/// and there is no way to ask it in advance whether a page will survive.
+fn from_bytes(bytes: &[u8]) -> Result<Extract, String> {
+    let doc = std::panic::catch_unwind(|| pdf_extract::Document::load_mem(bytes))
+        .map_err(|_| "that file could not be opened as a PDF".to_string())?
+        .map_err(|e| format!("that file could not be opened as a PDF: {e}"))?;
+
+    let pages = doc.get_pages();
+    let total_pages = pages.len() as u32;
+    if total_pages == 0 {
+        return Err("that PDF has no pages".into());
+    }
+
+    let mut text = String::new();
+    let mut failed_pages = Vec::new();
+    for page_num in pages.keys().copied() {
+        let page = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut buf = String::new();
+            let mut out = pdf_extract::PlainTextOutput::new(&mut buf);
+            pdf_extract::output_doc_page(&doc, &mut out, page_num).map(|_| buf)
+        }));
+        match page {
+            Ok(Ok(s)) => {
+                text.push_str(&s);
+                text.push('\n');
+            }
+            // Either outcome is one lost page, not a lost book.
+            _ => failed_pages.push(page_num),
+        }
+    }
+
+    let text = clean(&text);
     if text.trim().chars().count() < 40 {
         return Err(
             "no text could be extracted -- this may be a scanned PDF, which is pictures of \
@@ -33,7 +74,11 @@ fn from_bytes(bytes: &[u8]) -> Result<String, String> {
                 .into(),
         );
     }
-    Ok(text)
+    Ok(Extract {
+        text,
+        failed_pages,
+        total_pages,
+    })
 }
 
 /// Imports a PDF whose extraction has already been shown and accepted.
@@ -58,6 +103,7 @@ pub fn import(path: &std::path::Path, extracted: &str) -> Result<Book, String> {
 /// looks fixed and reads wrong, and the preview exists precisely so a person
 /// can judge them instead.
 fn clean(raw: &str) -> String {
+    let raw = &strip_leaders(raw);
     let mut out = String::with_capacity(raw.len());
     let mut lines = raw.lines().peekable();
 
@@ -100,6 +146,42 @@ fn clean(raw: &str) -> String {
     result.trim().to_string()
 }
 
+/// Removes the dot leaders a table of contents is built from.
+///
+/// `Dedication.............. 2` is a line of typography, not a sentence, and a
+/// voice reads every one of those stops. Three or more in a row is never
+/// prose -- an ellipsis is one character or three, and this needs four before
+/// it touches anything.
+fn strip_leaders(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut dots = 0usize;
+    for c in raw.chars() {
+        if c == '.' {
+            dots += 1;
+            continue;
+        }
+        if dots > 0 {
+            if dots >= 4 {
+                out.push(' ');
+            } else {
+                for _ in 0..dots {
+                    out.push('.');
+                }
+            }
+            dots = 0;
+        }
+        out.push(c);
+    }
+    if dots >= 4 {
+        out.push(' ');
+    } else {
+        for _ in 0..dots {
+            out.push('.');
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +220,24 @@ mod tests {
     #[test]
     fn a_file_that_is_not_a_pdf_is_refused() {
         assert!(from_bytes(b"not a pdf at all").is_err());
+    }
+
+    #[test]
+    fn table_of_contents_leaders_are_not_read_aloud() {
+        let t = clean("Dedication.............. 2\nChapter One............ 5");
+        assert!(!t.contains(".."), "{t:?}");
+        assert!(t.contains("Dedication"), "{t:?}");
+        assert!(t.contains('2'), "{t:?}");
+    }
+
+    #[test]
+    fn ordinary_punctuation_survives() {
+        assert_eq!(strip_leaders("One. Two... Three."), "One. Two... Three.");
+        assert_eq!(strip_leaders("end."), "end.");
+    }
+
+    #[test]
+    fn an_empty_buffer_is_refused_rather_than_panicking() {
+        assert!(from_bytes(b"").is_err());
     }
 }

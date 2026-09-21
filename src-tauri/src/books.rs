@@ -54,17 +54,28 @@ pub fn library(state: State<Arc<App>>) -> Vec<Shelf> {
 #[tauri::command]
 pub fn import_book(app: AppHandle) {
     std::thread::spawn(move || {
-        let Some(file) = app
+        let picked = app
             .dialog()
             .file()
             .add_filter("Documents", &["epub", "txt", "md", "markdown", "pdf"])
-            .blocking_pick_file()
-        else {
+            .blocking_pick_file();
+
+        let Some(file) = picked else {
             return; // cancelled, which is not an error
         };
         let Some(path) = file.as_path().map(|p| p.to_path_buf()) else {
             return;
         };
+
+        // Extraction of a large PDF takes a second or two and everything else
+        // is quicker, but the window has nothing to show in the meantime and a
+        // button that does nothing is indistinguishable from a broken one.
+        let _ = app.emit(
+            "importing",
+            serde_json::json!({
+                "name": path.file_name().map(|n| n.to_string_lossy().to_string())
+            }),
+        );
 
         let ext = path
             .extension()
@@ -73,13 +84,15 @@ pub fn import_book(app: AppHandle) {
 
         if ext == "pdf" {
             match pdf::preview(&path) {
-                Ok(text) => {
+                Ok(x) => {
                     let _ = app.emit(
                         "pdf_preview",
                         serde_json::json!({
                             "path": path.to_string_lossy(),
                             "name": path.file_stem().map(|n| n.to_string_lossy().to_string()),
-                            "text": text,
+                            "text": x.text,
+                            "total_pages": x.total_pages,
+                            "failed_pages": x.failed_pages.len(),
                         }),
                     );
                 }
@@ -195,15 +208,22 @@ pub fn get_book(app: AppHandle, listing: Listing) {
         })
         .and_then(|(book, bytes)| state.library.add(&book, &bytes));
 
-        let _ = app.emit(
-            "progress",
-            serde_json::json!({ "id": listing.id, "phase": "Done" }),
-        );
         match result {
             Ok(row) => {
+                let _ = app.emit(
+                    "progress",
+                    serde_json::json!({ "id": listing.id, "phase": "Done" }),
+                );
                 let _ = app.emit("imported", &row);
             }
-            Err(e) => fail(&app, e),
+            // Reported against the listing, not against "import": the window
+            // has a button waiting on this id and has to be able to find it.
+            Err(e) => {
+                let _ = app.emit(
+                    "failed",
+                    serde_json::json!({ "id": listing.id, "error": e }),
+                );
+            }
         }
     });
 }

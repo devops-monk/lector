@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What Lector's window is allowed to ask the core for. Without a capability file Tauri v2 grants the webview nothing at all -- commands defined by the app still work, which is why the window renders, but core:event:allow-listen is denied and every listen() call fails silently. That takes out the reading highlight, download progress and every 'the state changed, redraw' event, with no error anywhere.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

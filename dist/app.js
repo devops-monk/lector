@@ -489,6 +489,16 @@ function renderBooks() {
 
 $("import").onclick = () => invoke("import_book");
 
+listen("importing", (e) => {
+  $("import").textContent = `Reading ${e.payload.name ?? "it"}…`;
+  $("import").disabled = true;
+});
+
+function importDone() {
+  $("import").textContent = "Add a book…";
+  $("import").disabled = false;
+}
+
 $("urlform").onsubmit = (e) => {
   e.preventDefault();
   const url = $("url").value.trim();
@@ -552,7 +562,13 @@ function renderResults() {
     meta.append(el("div", "bookby", by));
     if (r.note) meta.append(el("div", "resultnote", r.note));
 
-    const btn = el("button", "get", r.bytes ? `Get · ${Math.round(r.bytes / 1024)} KB` : "Get");
+    const have = shelf.some((b) => b.title === r.title && (!r.author || b.author === r.author));
+    const btn = el(
+      "button",
+      "get",
+      have ? "In your library" : r.bytes ? `Get · ${Math.round(r.bytes / 1024)} KB` : "Get"
+    );
+    if (have) btn.classList.add("done");
     btn.onclick = () => {
       btn.disabled = true;
       btn.textContent = "0%";
@@ -579,7 +595,12 @@ const downloading = new Map();
 let pending = null;
 
 listen("pdf_preview", (e) => {
+  importDone();
   pending = e.payload;
+  const lost = e.payload.failed_pages || 0;
+  $("previewpages").textContent = lost
+    ? `${e.payload.total_pages} pages — ${lost} could not be read and are missing below.`
+    : `${e.payload.total_pages} pages, all readable.`;
   $("previewtext").textContent = e.payload.text;
   $("preview").hidden = false;
   $("chapters").hidden = true;
@@ -675,6 +696,7 @@ $("back").onclick = async () => {
 };
 
 listen("imported", (e) => {
+  importDone();
   refreshLibrary();
   showTab("library");
   // Browsing stays put: downloading one book is usually the first of several,
@@ -704,10 +726,17 @@ listen("progress", (e) => {
   if (btn) {
     if (e.payload.phase === "Done") {
       downloading.delete(e.payload.id);
-      btn.disabled = false;
-      btn.textContent = "Get";
+      // Not back to "Get". A 500 KB book over a fast connection is finished
+      // before the percentages are readable, so a button that returns to its
+      // starting state is the only thing the reader sees -- and it looks like
+      // nothing happened.
+      btn.textContent = "In your library";
+      btn.classList.add("done");
     } else if (e.payload.total) {
       btn.textContent = `${Math.round((e.payload.received / e.payload.total) * 100)}%`;
+    } else if (e.payload.received) {
+      // No Content-Length: count up in kilobytes rather than sit at 0%.
+      btn.textContent = `${Math.round(e.payload.received / 1024)} KB`;
     }
     return;
   }
@@ -715,17 +744,22 @@ listen("progress", (e) => {
   if (e.payload.phase === "Done") {
     progress.delete(e.payload.id);
     refresh();
-refreshLibrary();
-offerResume();
   } else {
     renderModels();
   }
 });
 listen("failed", (e) => {
+  importDone();
   progress.delete(e.payload.id);
   refresh();
-refreshLibrary();
-offerResume();
+  // A download that was waiting on this id gets its button back, so a failure
+  // is something you can retry rather than a row that is stuck disabled.
+  const btn = downloading.get(e.payload.id);
+  if (btn) {
+    downloading.delete(e.payload.id);
+    btn.disabled = false;
+    btn.textContent = "Retry";
+  }
   $("warntext").textContent = e.payload.error;
   $("warnbtn").style.display = "none";
   $("warn").classList.add("show");

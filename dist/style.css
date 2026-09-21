@@ -407,3 +407,12 @@ button.primary.stop { background: var(--ink-2); }
   color: var(--ink-3); font-size: 11px; margin-top: 3px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+
+/* A download that finished. Says so rather than offering itself again: a small
+   book arrives faster than the percentages can be read, so a button returning
+   to "Get" is the only thing the reader sees, and it reads as nothing having
+   happened. */
+.get.done {
+  border-color: var(--ok); color: var(--ok); cursor: default;
+}
+.get.done:hover { border-color: var(--ok); color: var(--ok); }
