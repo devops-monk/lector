@@ -51,8 +51,22 @@ pub struct SpeakJob {
     pub speed: f32,
 }
 
+/// Reading a document differs from speaking a selection in one way that
+/// matters: the chunks are already enumerated and addressed, so a job carries a
+/// starting index rather than a fresh list. Seeking is then just a new index
+/// over the same vector, which is why there is no queue here -- what would have
+/// been a queue is a cursor.
+pub struct ReadJob {
+    pub generation: u64,
+    pub voice: Voice,
+    pub chunks: Arc<Vec<String>>,
+    pub from: usize,
+    pub speed: f32,
+}
+
 pub enum Command {
     Speak(Box<SpeakJob>),
+    Read(Box<ReadJob>),
     Stop,
     Shutdown,
 }
@@ -88,6 +102,24 @@ impl Handle {
             generation,
             voice,
             chunks,
+            speed,
+        })));
+    }
+
+    /// Reads an enumerated document from `from`, interrupting anything playing.
+    ///
+    /// The same call serves play, seek and restore-a-saved-position; there is
+    /// no separate seek verb, because they differ only in the index.
+    pub fn read(&self, voice: Voice, chunks: Arc<Vec<String>>, from: usize, speed: f32) {
+        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        self.total.store(chunks.len(), Ordering::Release);
+        self.state.request_flush();
+        self.state.set_paused(false);
+        let _ = self.tx.send(Command::Read(Box::new(ReadJob {
+            generation,
+            voice,
+            chunks,
+            from,
             speed,
         })));
     }
@@ -304,6 +336,25 @@ impl Actor {
                     self.out.borrow_mut().resampler.reset();
                     self.speaking.store(false, Ordering::Relaxed);
                 }
+                Command::Read(job) => {
+                    let ReadJob {
+                        generation,
+                        voice,
+                        chunks,
+                        from,
+                        speed,
+                    } = *job;
+                    if generation < self.generation.load(Ordering::Acquire) {
+                        continue;
+                    }
+                    if let Err(e) = self.ensure_voice(voice) {
+                        eprintln!("lector: {e}");
+                        continue;
+                    }
+                    self.speaking.store(true, Ordering::Relaxed);
+                    self.read(generation, &chunks, from, speed);
+                    self.speaking.store(false, Ordering::Relaxed);
+                }
                 Command::Speak(job) => {
                     let SpeakJob {
                         generation,
@@ -314,23 +365,57 @@ impl Actor {
                     if generation < self.generation.load(Ordering::Acquire) {
                         continue; // superseded before we even started
                     }
-                    if voice != self.voice {
-                        match load(&voice) {
-                            Ok(tts) => {
-                                self.out.borrow_mut().resampler =
-                                    Resampler2::new(tts.sample_rate() as u32, self.device_rate);
-                                self.tts = tts;
-                                self.voice = voice;
-                            }
-                            Err(e) => {
-                                eprintln!("lector: failed to load voice: {e}");
-                                continue;
-                            }
-                        }
+                    if let Err(e) = self.ensure_voice(voice) {
+                        eprintln!("lector: {e}");
+                        continue;
                     }
                     self.speaking.store(true, Ordering::Relaxed);
                     self.speak(generation, &chunks, speed);
                     self.speaking.store(false, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+    /// Loads a voice if it differs from the one in hand.
+    fn ensure_voice(&mut self, voice: Voice) -> Result<(), String> {
+        if voice == self.voice {
+            return Ok(());
+        }
+        let tts = load(&voice)?;
+        self.out.borrow_mut().resampler =
+            Resampler2::new(tts.sample_rate() as u32, self.device_rate);
+        self.tts = tts;
+        self.voice = voice;
+        Ok(())
+    }
+
+    /// Reads from `from` to the end of the document.
+    ///
+    /// Two failure modes, both real and both from readest: a unit that produces
+    /// no audio should be skipped rather than stall the book, and a model that
+    /// has started failing should abort rather than grind through every
+    /// remaining unit. Neither should end a book early on a single bad chunk.
+    fn read(&mut self, generation: u64, chunks: &[String], from: usize, speed: f32) {
+        self.out.borrow_mut().resampler.reset();
+        self.state.flush_and_settle();
+
+        let mut failures = 0u32;
+        for (i, chunk) in chunks.iter().enumerate().skip(from) {
+            if self.generation.load(Ordering::Acquire) != generation {
+                return;
+            }
+            if i > from {
+                self.push_silence(SENTENCE_GAP);
+            }
+            self.state.mark(generation, i);
+            if self.synthesize(generation, chunk, speed) {
+                failures = 0;
+            } else {
+                failures += 1;
+                if failures >= 5 {
+                    eprintln!("lector: five consecutive synthesis failures, stopping");
+                    return;
                 }
             }
         }
@@ -359,7 +444,12 @@ impl Actor {
         }
     }
 
-    fn synthesize(&mut self, generation: u64, text: &str, speed: f32) {
+    /// Returns whether the model produced audio.
+    ///
+    /// The result was previously discarded. It matters now: a document is long
+    /// enough that a run of failures means the model is broken, not the text,
+    /// and grinding silently through a hundred more units helps nobody.
+    fn synthesize(&mut self, generation: u64, text: &str, speed: f32) -> bool {
         let current = self.generation.clone();
         let out = self.out.clone();
         let model_rate = self.tts.sample_rate() as u32;
@@ -385,12 +475,16 @@ impl Actor {
             speed,
             ..Default::default()
         };
-        let _ = self.tts.generate_with_config(text, &cfg, Some(cb));
+        let produced = self
+            .tts
+            .generate_with_config(text, &cfg, Some(cb))
+            .is_some();
 
         let tail: Vec<f32> = self.out.borrow_mut().resampler.flush().to_vec();
         self.out
             .borrow_mut()
             .push_all(&tail, generation, &self.generation);
+        produced
     }
 
     fn push_silence(&mut self, d: Duration) {

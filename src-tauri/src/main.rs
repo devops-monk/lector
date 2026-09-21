@@ -9,6 +9,7 @@
 //! second implementation.
 
 mod api;
+pub mod reading;
 mod selection;
 #[cfg(target_os = "macos")]
 mod services;
@@ -22,6 +23,7 @@ use lector_engine::catalog::{self, Model};
 use lector_engine::install::{self, Cancel, Phase};
 use lector_engine::{Lector, Voice};
 use lector_text::SanitizeOptions;
+use reading::Bookmark;
 use settings::Settings;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
@@ -36,17 +38,34 @@ fn hotkey() -> Shortcut {
 
 pub struct App {
     lector: Mutex<Option<Lector>>,
+    /// The document currently loaded for reading, enumerated once. Shared with
+    /// the engine by Arc so a seek cannot re-chunk it into something else.
+    doc: Mutex<Option<Arc<Vec<String>>>>,
     /// Kept so the engine's position callback can emit to the window. The
     /// callback outlives any single command, so it cannot borrow a handle.
     app: Mutex<Option<AppHandle>>,
+    /// How far into the current document the voice had read. Written from the
+    /// position callback, so it is the audible position, not the synthesized one.
+    pub bookmark: Bookmark,
     settings: Mutex<Settings>,
     data_dir: PathBuf,
+    /// Set once, immediately after construction, so callbacks can reach back
+    /// into the app without an ownership cycle.
+    weak: Mutex<std::sync::Weak<App>>,
     /// Model ids with a download in flight. A set rather than a flag so two
     /// concurrent downloads cannot cancel or duplicate each other.
     installing: Mutex<HashSet<String>>,
 }
 
 impl App {
+    /// A weak handle to self for the position callback.
+    ///
+    /// Weak rather than strong because the callback lives on the cursor thread
+    /// and holding an `Arc<App>` there would keep the app alive past quit.
+    fn clone_for_callback(&self) -> std::sync::Weak<App> {
+        self.weak.lock().unwrap().clone()
+    }
+
     fn models_dir(&self) -> PathBuf {
         self.data_dir.join("models")
     }
@@ -140,7 +159,11 @@ impl App {
             // chunk being *heard* changes, which is what a highlight follows.
             None => {
                 let app = self.app.lock().unwrap().clone();
+                let state = self.clone_for_callback();
                 match Lector::with_voice_and_position(voice, move |p| {
+                    if let Some(state) = state.upgrade() {
+                        state.bookmark.mark(p.index);
+                    }
                     if let Some(app) = app.as_ref() {
                         let _ = app.emit(
                             "reading",
@@ -306,6 +329,10 @@ fn main() {
             api::level,
             api::speak,
             api::chunk_preview,
+            api::read_document,
+            api::seek,
+            api::reading_state,
+            api::forget_reading,
             api::pause,
             api::resume,
             api::stop,
@@ -324,11 +351,15 @@ fn main() {
 
             let state = Arc::new(App {
                 lector: Mutex::new(None),
+                doc: Mutex::new(None),
                 app: Mutex::new(Some(app.handle().clone())),
+                bookmark: Bookmark::load(&data_dir),
+                weak: Mutex::new(std::sync::Weak::new()),
                 settings: Mutex::new(settings),
                 data_dir,
                 installing: Mutex::new(HashSet::new()),
             });
+            *state.weak.lock().unwrap() = Arc::downgrade(&state);
             app.manage(state.clone());
             *app_state.lock().unwrap() = Some(state.clone());
 
@@ -349,8 +380,17 @@ fn main() {
             services::register(state.clone());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running lector");
+        .build(tauri::generate_context!())
+        .expect("error while building lector")
+        .run(|app, event| {
+            // The debounce means the last few sentences are only in memory.
+            // Quitting is the one moment that is guaranteed to matter.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(s) = app.try_state::<Arc<App>>() {
+                    s.bookmark.flush();
+                }
+            }
+        });
 }
 
 /// The speeds worth offering. Kept short: a slider in a menu is a fiddle, and

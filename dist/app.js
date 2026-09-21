@@ -182,6 +182,14 @@ function showFollow(cs) {
     el.className = "chunk";
     el.dataset.i = String(i);
     el.textContent = c + " ";
+    el.title = "Read from here";
+    // Seeking is the same call as playing, with a different index -- the
+    // engine keeps the enumeration, so a click cannot re-chunk the document
+    // into something the highlight no longer matches.
+    el.onclick = () => {
+      highlight(i);
+      invoke("seek", { to: i });
+    };
     box.append(el);
   });
   box.hidden = false;
@@ -212,6 +220,39 @@ function highlight(index) {
   }
 }
 
+// ---- resume -------------------------------------------------------------
+//
+// A saved position is offered, never acted on. Launching an app must not make
+// it start talking: of everything Lector does, being heard is the one thing the
+// reader cannot take back.
+
+let saved = null;
+
+async function offerResume() {
+  saved = await invoke("reading_state");
+  if (!saved) return;
+  const pct = saved.total ? Math.round((saved.index / saved.total) * 100) : 0;
+  $("resumetext").textContent = `You stopped ${pct}% through what you were reading.`;
+  $("text").value = saved.text;
+  $("resume").hidden = false;
+}
+
+$("resumebtn").onclick = async () => {
+  if (!saved) return;
+  $("resume").hidden = true;
+  const cs = await invoke("read_document", { text: saved.text, from: saved.index });
+  if (cs.length) {
+    showFollow(cs);
+    highlight(saved.index);
+  }
+};
+
+$("resumeno").onclick = () => {
+  $("resume").hidden = true;
+  invoke("forget_reading");
+  saved = null;
+};
+
 $("go").onclick = async () => {
   if (snap?.speaking) {
     await invoke("stop");
@@ -220,12 +261,11 @@ $("go").onclick = async () => {
   }
   const text = $("text").value.trim();
   if (!text) return;
-  // Ask the engine how it will chunk this, so the view matches the audio.
-  try {
-    chunks = await invoke("chunk_preview", { text });
-    if (chunks.length) showFollow(chunks);
-  } catch { /* older backend: just speak */ }
-  invoke("speak", { text });
+  // One call: it enumerates, starts reading, and returns the very chunks the
+  // engine is speaking. Asking separately would be two enumerations.
+  $("resume").hidden = true;
+  const cs = await invoke("read_document", { text, from: 0 });
+  if (cs.length) showFollow(cs);
 };
 
 $("pause").onclick = async () => {
@@ -260,6 +300,7 @@ listen("progress", (e) => {
   if (e.payload.phase === "Done") {
     progress.delete(e.payload.id);
     refresh();
+offerResume();
   } else {
     renderModels();
   }
@@ -267,6 +308,7 @@ listen("progress", (e) => {
 listen("failed", (e) => {
   progress.delete(e.payload.id);
   refresh();
+offerResume();
   $("warntext").textContent = e.payload.error;
   $("warnbtn").style.display = "none";
   $("warn").classList.add("show");
@@ -299,3 +341,4 @@ setInterval(async () => {
 }, 60);
 
 refresh();
+offerResume();

@@ -181,9 +181,10 @@ kbd {
   font: 15px/1.7 var(--font); color: var(--ink-3);
 }
 #follow .chunk {
-  cursor: default; border-radius: 5px; padding: 1px 3px; margin: -1px -3px;
+  cursor: pointer; border-radius: 5px; padding: 1px 3px; margin: -1px -3px;
   transition: color .15s, background-color .15s;
 }
+#follow .chunk:hover { background: var(--paper-3); }
 #follow .chunk.spoken { color: var(--ink-2); }
 #follow .chunk.now {
   color: var(--ink); background: var(--accent-bg); font-weight: 500;
@@ -226,3 +227,33 @@ button.primary.stop { background: var(--ink-2); }
 #speed { width: 130px; accent-color: var(--accent); }
 
 .empty { color: var(--ink-3); padding: 24px 12px; text-align: center; font-size: 12px; }
+
+/* The resume offer. Sits where the warning sits and looks like information
+   rather than an alarm -- it is a convenience, not a problem to be fixed. */
+#resume {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 20px 0;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: var(--paper-3);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+#resumebtn {
+  border: 1px solid var(--line); background: none; color: inherit;
+  border-radius: 6px; padding: 3px 10px; cursor: pointer; font: inherit;
+}
+#resumebtn:hover { color: var(--ink-1); }
+#resume[hidden] { display: none; }
+#resumetext { flex: 1; }
+#resume button.link {
+  background: none;
+  border: 0;
+  color: var(--ink-3);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+#resume button.link:hover { color: var(--ink-1); }

@@ -13,6 +13,8 @@
 //! utterance ignores it** and goes out as one sentence, however short.
 
 use icu_segmenter::options::SentenceBreakInvariantOptions;
+use std::ops::Range;
+
 use icu_segmenter::SentenceSegmenter;
 
 /// Sentences shorter than this are merged into the next one -- except the first.
@@ -62,36 +64,51 @@ fn ends_with_abbreviation(s: &str) -> bool {
             .is_some_and(|c| c.is_ascii_digit())
 }
 
+/// Byte ranges of each sentence in `text`, in order, already trimmed.
+///
+/// Spans rather than owned strings because everything downstream needs to know
+/// *where* a sentence came from: the follow-along view highlights a range of
+/// the source, and a resume marker records a position in it. Building strings
+/// here and recovering positions later would mean two descriptions of the same
+/// split, which is exactly the kind of pair that drifts.
+pub fn sentence_spans(text: &str) -> Vec<Range<usize>> {
+    let segmenter = SentenceSegmenter::new(SentenceBreakInvariantOptions::default());
+    let mut out: Vec<Range<usize>> = Vec::new();
+    let mut prev = 0usize;
+
+    let push = |out: &mut Vec<Range<usize>>, start: usize, end: usize| {
+        // Trim by walking the bytes, so the range stays valid UTF-8 boundaries.
+        let piece = &text[start..end];
+        let lead = piece.len() - piece.trim_start().len();
+        let trail = piece.len() - piece.trim_end().len();
+        if lead + trail >= piece.len() {
+            return; // all whitespace
+        }
+        let (s, e) = (start + lead, end - trail);
+        match out.last_mut() {
+            // ICU breaks after "Dr." and "e.g."; re-join by extending the
+            // previous span rather than concatenating strings.
+            Some(last) if ends_with_abbreviation(&text[last.clone()]) => last.end = e,
+            _ => out.push(s..e),
+        }
+    };
+
+    for bp in segmenter.segment_str(text).skip(1) {
+        push(&mut out, prev, bp);
+        prev = bp;
+    }
+    if prev < text.len() {
+        push(&mut out, prev, text.len());
+    }
+    out
+}
+
 /// Splits text into sentences using the Unicode sentence-break algorithm, then
 /// re-joins any break that ICU put after an abbreviation.
 pub fn split_sentences(text: &str) -> Vec<String> {
-    let segmenter = SentenceSegmenter::new(SentenceBreakInvariantOptions::default());
-    let mut out: Vec<String> = Vec::new();
-    let mut prev = 0usize;
-
-    for bp in segmenter.segment_str(text).skip(1) {
-        let piece = &text[prev..bp];
-        prev = bp;
-        if piece.trim().is_empty() {
-            continue;
-        }
-        match out.last_mut() {
-            Some(last) if ends_with_abbreviation(last) => last.push_str(piece),
-            _ => out.push(piece.to_string()),
-        }
-    }
-    if prev < text.len() {
-        let tail = &text[prev..];
-        if !tail.trim().is_empty() {
-            match out.last_mut() {
-                Some(last) if ends_with_abbreviation(last) => last.push_str(tail),
-                _ => out.push(tail.to_string()),
-            }
-        }
-    }
-    out.into_iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    sentence_spans(text)
+        .into_iter()
+        .map(|r| text[r].to_string())
         .collect()
 }
 
@@ -101,93 +118,163 @@ pub fn split_sentences(text: &str) -> Vec<String> {
 /// single sentence regardless of length, so the hotkey speaks almost instantly.
 /// Set it false for export, where nothing is waiting and prosody wins.
 pub fn pack_chunks(sentences: &[String], first_chunk_fast: bool) -> Vec<String> {
-    let mut chunks: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    let len = |s: &str| s.chars().count();
+    // Reconstruct a source so there is one packer rather than two. Joining with
+    // a single space is what the old string-based packer did between sentences,
+    // so behaviour is unchanged.
+    let source = sentences.join(" ");
+    let spans = {
+        let mut at = 0usize;
+        let mut v = Vec::with_capacity(sentences.len());
+        for s in sentences {
+            v.push(at..at + s.len());
+            at += s.len() + 1; // the joining space
+        }
+        v
+    };
+    pack_units(&source, &spans, first_chunk_fast)
+        .into_iter()
+        .map(|u| u.text)
+        .collect()
+}
 
-    for sentence in sentences {
-        for piece in hard_split(sentence) {
+/// One synthesizable chunk, and where it came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unit {
+    /// Exactly what is handed to the synthesizer.
+    pub text: String,
+    /// Indices into the section's sentence list that this covers. Usually one;
+    /// two or more when short sentences were merged for prosody.
+    pub sentences: Range<usize>,
+    /// Byte range of the source this covers, for highlighting.
+    pub span: Range<usize>,
+}
+
+/// Packs sentence spans into units, preserving where each one came from.
+///
+/// This is the packer; `pack_chunks` is a thin wrapper over it. The rules are
+/// unchanged: merge up to a prosodic floor, stop before overshooting the
+/// target, hard-split a monster sentence at a space, and never emit a unit with
+/// no word characters in it.
+pub fn pack_units(source: &str, spans: &[Range<usize>], first_chunk_fast: bool) -> Vec<Unit> {
+    let mut units: Vec<Unit> = Vec::new();
+    // The unit being built: sentence index it started at, byte range so far.
+    let mut cur: Option<(usize, Range<usize>)> = None;
+    let chars = |r: &Range<usize>| source[r.clone()].chars().count();
+
+    let flush = |units: &mut Vec<Unit>, cur: &mut Option<(usize, Range<usize>)>, end_si: usize| {
+        if let Some((start_si, span)) = cur.take() {
+            let text = source[span.clone()].trim().to_string();
+            if !text.is_empty() {
+                units.push(Unit {
+                    text,
+                    sentences: start_si..end_si + 1,
+                    span,
+                });
+            }
+        }
+    };
+
+    for (si, sentence) in spans.iter().enumerate() {
+        for piece in hard_split_span(source, sentence) {
             // The latency exception: the very first sentence goes out alone.
-            if first_chunk_fast && chunks.is_empty() && cur.is_empty() {
-                chunks.push(piece);
+            if first_chunk_fast && units.is_empty() && cur.is_none() {
+                let text = source[piece.clone()].trim().to_string();
+                if !text.is_empty() {
+                    units.push(Unit {
+                        text,
+                        sentences: si..si + 1,
+                        span: piece,
+                    });
+                }
                 continue;
             }
 
-            if cur.is_empty() {
-                cur = piece;
-            } else if len(&cur) + 1 + len(&piece) <= TARGET_CHUNK_CHARS {
-                cur.push(' ');
-                cur.push_str(&piece);
-            } else {
-                // Adding this would overshoot the target, so close the current
-                // chunk even if it has not reached the floor yet.
-                chunks.push(std::mem::take(&mut cur));
-                cur = piece;
+            match &mut cur {
+                None => cur = Some((si, piece)),
+                Some((_, span)) => {
+                    let joined = span.start..piece.end;
+                    if chars(&joined) <= TARGET_CHUNK_CHARS {
+                        *span = joined;
+                    } else {
+                        // Adding this would overshoot, so close the current unit
+                        // even if it has not reached the floor yet.
+                        flush(&mut units, &mut cur, si.saturating_sub(1));
+                        cur = Some((si, piece));
+                    }
+                }
             }
 
-            // Flush once past the floor. This is V1R4's rule: a chunk is allowed
-            // to be short, but not so short that it loses its prosodic footing.
-            if len(&cur) >= MIN_CHUNK_CHARS {
-                chunks.push(std::mem::take(&mut cur));
+            // Flush once past the floor: a unit may be short, but not so short
+            // it loses its prosodic footing.
+            if cur
+                .as_ref()
+                .is_some_and(|(_, sp)| chars(sp) >= MIN_CHUNK_CHARS)
+            {
+                flush(&mut units, &mut cur, si);
             }
         }
     }
-    if !cur.is_empty() {
-        chunks.push(cur);
-    }
+    flush(&mut units, &mut cur, spans.len().saturating_sub(1));
 
-    merge_unspeakable(chunks)
+    merge_unspeakable_units(source, units)
 }
 
 /// Splits a sentence that exceeds MAX_CHUNK_CHARS at the last space in budget.
-fn hard_split(s: &str) -> Vec<String> {
-    if s.chars().count() <= MAX_CHUNK_CHARS {
-        return vec![s.to_string()];
+///
+/// Returns byte ranges into `source`, so a split piece still knows where it
+/// came from. Most sentences pass through as a single range.
+fn hard_split_span(source: &str, span: &Range<usize>) -> Vec<Range<usize>> {
+    let text = &source[span.clone()];
+    if text.chars().count() <= MAX_CHUNK_CHARS {
+        return vec![span.clone()];
     }
+
     let mut out = Vec::new();
-    let mut rest = s;
-    while rest.chars().count() > MAX_CHUNK_CHARS {
-        let budget: usize = rest
+    let mut at = 0usize; // byte offset within `text`
+    while text[at..].chars().count() > MAX_CHUNK_CHARS {
+        let budget = text[at..]
             .char_indices()
             .nth(MAX_CHUNK_CHARS)
-            .map(|(i, _)| i)
-            .unwrap_or(rest.len());
-        // Only cut at a space if one exists reasonably deep into the budget;
-        // otherwise a pathological run of non-spaces would emit slivers.
-        let cut = rest[..budget]
+            .map(|(i, _)| at + i)
+            .unwrap_or(text.len());
+        // Only cut at a space reasonably deep into the budget; otherwise a run
+        // of non-spaces would emit slivers.
+        let cut = text[at..budget]
             .rfind(' ')
-            .filter(|i| *i > budget / 3)
+            .map(|i| at + i)
+            .filter(|i| *i - at > (budget - at) / 3)
             .unwrap_or(budget);
-        let (head, tail) = rest.split_at(cut);
-        out.push(head.trim().to_string());
-        rest = tail.trim_start();
+        out.push(span.start + at..span.start + cut);
+        at = cut + text[cut..].len() - text[cut..].trim_start().len();
     }
-    let rest = rest.trim();
-    if !rest.is_empty() {
-        out.push(rest.to_string());
+    if at < text.len() {
+        out.push(span.start + at..span.end);
     }
     out
 }
 
-/// A chunk with no word characters is a click, not a word. Merge it backwards,
+/// A unit with no word characters is a click, not a word. Merge it backwards,
 /// or forwards if it is first.
-fn merge_unspeakable(chunks: Vec<String>) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for c in chunks {
-        if !crate::sanitize::is_speakable(&c) {
+fn merge_unspeakable_units(source: &str, units: Vec<Unit>) -> Vec<Unit> {
+    let mut out: Vec<Unit> = Vec::new();
+    for u in units {
+        if !crate::sanitize::is_speakable(&u.text) {
             if let Some(last) = out.last_mut() {
-                last.push(' ');
-                last.push_str(&c);
+                last.span = last.span.start..u.span.end;
+                last.sentences = last.sentences.start..u.sentences.end;
+                last.text = source[last.span.clone()].trim().to_string();
                 continue;
             }
         }
-        out.push(c);
+        out.push(u);
     }
-    // A leading unspeakable chunk has no predecessor; fold it into its successor.
-    if out.len() >= 2 && !crate::sanitize::is_speakable(&out[0]) {
+    // A leading unspeakable unit has no predecessor; fold it into its successor.
+    if out.len() >= 2 && !crate::sanitize::is_speakable(&out[0].text) {
         let head = out.remove(0);
-        out[0] = format!("{head} {}", out[0]);
+        out[0].span = head.span.start..out[0].span.end;
+        out[0].sentences = head.sentences.start..out[0].sentences.end;
+        out[0].text = source[out[0].span.clone()].trim().to_string();
     }
-    out.retain(|c| crate::sanitize::is_speakable(c));
+    out.retain(|u| crate::sanitize::is_speakable(&u.text));
     out
 }

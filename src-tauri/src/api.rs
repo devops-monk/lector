@@ -136,6 +136,52 @@ pub fn chunk_preview(text: String) -> Vec<String> {
     lector_text::prepare(&text, SanitizeOptions::READING, true)
 }
 
+/// Enumerates a document and starts reading it from `from`.
+///
+/// The chunking happens once, here, and both the engine and the returned list
+/// come from that single enumeration.
+#[tauri::command]
+pub fn read_document(text: String, from: usize, state: State<Arc<App>>) -> Vec<String> {
+    // false, deliberately: the fast-first-chunk rule shifts boundaries, so a
+    // position saved under it would not survive a reopen.
+    let chunks = Arc::new(lector_text::prepare(&text, SanitizeOptions::READING, false));
+    *state.doc.lock().unwrap() = Some(chunks.clone());
+    state.bookmark.begin(&text, from, chunks.len());
+    if let Some(l) = state.lector.lock().unwrap().as_ref() {
+        l.read(chunks.clone(), from);
+    }
+    (*chunks).clone()
+}
+
+/// Where the last session stopped, if it stopped in the middle of something.
+///
+/// Returned rather than acted on: restoring a position must never start the
+/// voice. An app that begins talking because it was launched is a fright, and
+/// the one thing a reader cannot undo is having been heard.
+#[tauri::command]
+pub fn reading_state(state: State<Arc<App>>) -> Option<crate::reading::Reading> {
+    state.bookmark.get().filter(|r| r.index > 0)
+}
+
+/// Forgets the saved position. The window offers this next to Resume, because
+/// a bookmark that cannot be dismissed is a nag.
+#[tauri::command]
+pub fn forget_reading(state: State<Arc<App>>) {
+    state.bookmark.clear();
+}
+
+/// Jumps to a unit in the document already loaded.
+#[tauri::command]
+pub fn seek(to: usize, state: State<Arc<App>>) {
+    let doc = state.doc.lock().unwrap().clone();
+    if let (Some(doc), Some(l)) = (doc, state.lector.lock().unwrap().as_ref()) {
+        if to < doc.len() {
+            state.bookmark.mark(to);
+            l.read(doc, to);
+        }
+    }
+}
+
 #[tauri::command]
 pub fn pause(state: State<Arc<App>>) {
     if let Some(l) = state.lector.lock().unwrap().as_ref() {

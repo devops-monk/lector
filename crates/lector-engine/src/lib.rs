@@ -91,6 +91,16 @@ impl Lector {
         self.handle.speak(self.voice.clone(), chunks, self.speed);
     }
 
+    /// Reads an already-enumerated document from `from`.
+    ///
+    /// Play, seek and restore are the same call with a different index. The
+    /// caller owns the enumeration and passes the same `Arc` every time, so the
+    /// engine and the view can never be speaking about different chunks.
+    pub fn read(&self, chunks: std::sync::Arc<Vec<String>>, from: usize) {
+        self.handle
+            .read(self.voice.clone(), chunks, from, self.speed);
+    }
+
     /// Stops immediately, mid-sentence.
     pub fn stop(&self) {
         self.handle.stop();

@@ -257,3 +257,116 @@ fn cjk_text_survives_the_pipeline() {
     assert!(!c.is_empty());
     assert!(c.join("").contains('\u{6674}'));
 }
+
+// ---------- provenance ----------
+//
+// The follow-along highlight is an index into `units`, and the view renders
+// `source[unit.span]`. If a span is wrong the highlight lands on the wrong
+// words, which looks exactly like a timing bug and is not one. These pin the
+// mapping down.
+
+#[test]
+fn every_unit_span_yields_its_own_text() {
+    // Each sentence is over the 100-char floor, so each becomes its own unit.
+    // Shorter sentences would merge into one and the test would prove nothing.
+    let sec = lector_text::enumerate(
+        "The first sentence runs on for long enough that it comfortably clears the prosodic floor on its own. \
+         The second sentence is likewise padded out well past a hundred characters so that it too stands alone. \
+         A third sentence, equally verbose, guarantees there are several units to compare against their spans.",
+        N,
+        false,
+    );
+    assert!(
+        sec.units.len() > 1,
+        "expected several units, got {}",
+        sec.units.len()
+    );
+    for u in &sec.units {
+        assert_eq!(
+            sec.source[u.span.clone()].trim(),
+            u.text,
+            "unit text does not match the span it claims"
+        );
+    }
+}
+
+#[test]
+fn unit_spans_are_ordered_and_do_not_overlap() {
+    let sec = lector_text::enumerate(
+        "One sentence here that is long enough on its own to clear the hundred character floor comfortably. \
+         Two follows it, also padded out past the floor so that it forms a unit entirely of its own. \
+         Three arrives last, equally long, so that the ordering of at least three spans can be checked.",
+        N,
+        false,
+    );
+    let mut prev_end = 0usize;
+    for u in &sec.units {
+        assert!(u.span.start >= prev_end, "spans overlap or go backwards");
+        assert!(u.span.end > u.span.start, "empty span");
+        prev_end = u.span.end;
+    }
+    assert!(prev_end <= sec.source.len());
+}
+
+#[test]
+fn sentence_indices_point_at_the_right_sentences() {
+    let sec = lector_text::enumerate("Alpha here. Bravo there. Charlie everywhere.", N, false);
+    for u in &sec.units {
+        // Every sentence a unit claims must fall inside that unit's own span.
+        for si in u.sentences.clone() {
+            let sent = &sec.sentences[si];
+            assert!(
+                sent.start >= u.span.start && sent.end <= u.span.end,
+                "unit claims sentence {si} but does not span it"
+            );
+        }
+    }
+}
+
+#[test]
+fn enumerate_and_prepare_agree() {
+    // prepare() is a view over enumerate(); if they ever diverge, the engine
+    // and the view would be speaking about different chunks.
+    let text =
+        "A sentence. Another one here. A third, somewhat longer, to force packing behaviour.";
+    for fast in [true, false] {
+        let a = lector_text::prepare(text, N, fast);
+        let b: Vec<String> = lector_text::enumerate(text, N, fast)
+            .units
+            .into_iter()
+            .map(|u| u.text)
+            .collect();
+        assert_eq!(
+            a, b,
+            "prepare and enumerate disagree (first_chunk_fast={fast})"
+        );
+    }
+}
+
+#[test]
+fn first_chunk_fast_changes_boundaries_so_reading_must_not_use_it() {
+    // The reason reading mode pins this to false: the two produce different
+    // chunk boundaries, so a position recorded under one is wrong under the
+    // other.
+    let text = "Short. Now a considerably longer sentence that will be packed differently \
+                depending on whether the first chunk was allowed to go out alone.";
+    let fast = lector_text::prepare(text, N, true);
+    let slow = lector_text::prepare(text, N, false);
+    assert_ne!(fast, slow, "if these ever match, the pinning is pointless");
+}
+
+#[test]
+fn spans_survive_multibyte_text() {
+    // Spans are byte ranges; slicing one at a non-boundary would panic.
+    let sec = lector_text::enumerate(
+        "Café closed early. Naïve résumé façade. \u{4ECA}\u{65E5}\u{306F}\u{6674}\u{308C}\u{3002} Then some more text to pack.",
+        N,
+        false,
+    );
+    for u in &sec.units {
+        let _ = &sec.source[u.span.clone()]; // panics if not on a boundary
+    }
+    for s in &sec.sentences {
+        let _ = &sec.source[s.clone()];
+    }
+}
