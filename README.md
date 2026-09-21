@@ -1,7 +1,8 @@
 # Lector
 
 **Local-only text to speech for the desktop.** Select text anywhere, press a key,
-hear it read aloud. Nothing you select ever leaves your machine.
+hear it read aloud — or import a book and have it read to you, following the
+words as they are spoken. Nothing you read ever leaves your machine.
 
 Lector is the mirror image of [Vox](https://github.com/devops-monk/vox): Vox turns
 speech into text with a global hotkey; Lector turns text into speech with one.
@@ -18,7 +19,9 @@ does neither:
   linked statically into the binary. The phonemizer (espeak-ng) is inside that
   static library, so there is not even a subprocess.
 - **No network at runtime.** Models are downloaded once, verified, and used
-  offline forever after. Turn off Wi-Fi and it still works.
+  offline forever after. Turn off Wi-Fi and it still works. Two features reach
+  outward and both fetch *in* — downloading a voice, and importing a web article
+  or a free book. Nothing about a document you are reading is ever sent out.
 - **No sidecar and no IPC for audio.** The model and the audio device live on the
   same thread, so synthesized samples go straight into the ring buffer the sound
   card is draining. Audio never crosses a process or IPC boundary.
@@ -56,20 +59,61 @@ Text is not fed to the model raw. It is turned into something worth listening to
 - Which of these apply is per-context: aggressive for narrating an agent, gentle
   for a document, off entirely for a script someone wrote to be spoken.
 
+### Reading documents and books
+
+- **Import EPUB, plain text, Markdown, PDF, or a web article by URL.** Each
+  becomes the same thing internally, so the reader behaves identically whatever
+  it was.
+- **Follow-along highlighting.** The chunk being spoken is highlighted as you
+  hear it, and clicking any chunk jumps the voice there.
+- **The highlight follows audio, not synthesis.** Generation runs several chunks
+  ahead of playback; a highlight keyed on it would sit permanently ahead of the
+  voice. Marks are timed against frames the sound card has actually rendered.
+- **Pause and resume** land on the same word, because pause freezes the consumer
+  rather than discarding what was generated.
+- **Chapters advance by themselves**, on the mark that says the last sample was
+  *heard* rather than merely produced.
+- **Your place is kept.** Per book, as a `(chapter, unit)` pair beside the book;
+  for pasted text, as a bookmark offered on next launch — offered, never acted
+  on. Launching Lector will not make it start talking.
+- **A library of free books.** Search Project Gutenberg's 75,000 titles or browse
+  Standard Ebooks' recent releases, and download either without leaving the app.
+
+### What is not read aloud
+
+Ebook and web extraction is opinionated about what a voice should say:
+
+- Footnotes and their markers. An `aside[epub:type=footnote]` and a bare
+  superscript `12` are both skipped — a footnote read mid-sentence is the single
+  most jarring thing in narration. A superscript that is a word (`1ˢᵗ`) survives.
+- Scripts, styles, and — in books — data tables and figures.
+- On the web: navigation, headers, footers, forms, and comment threads. Lector
+  narrates *an article*, not a page.
+
 ### Voices
 
-- **Piper** (21 MB) — fast and small, ready seconds after first launch.
-- **Kokoro** (349 MB) — noticeably better, five English speakers
-  (`af_heart`, `af_bella`, `am_michael`, `bf_emma`, `bm_george`).
-- Downloaded from the menu bar with progress, verified by SHA-256, and unpacked
-  atomically. A model that fails its checksum installs **nothing** — no
-  directory, no partial file.
+- **12 models, 181 voices.** Piper (21 MB, fast), Kitten Nano (29 MB, eight
+  voices), VCTK (144 MB, 109 speakers), Kokoro (349 MB, 28 English speakers), and
+  several single-voice Piper models including a Scottish and a northern English
+  one.
+- **The audition is the download.** A model you do not have reads *Hear it ·
+  349 MB* — the cost on the button, because pressing it is a commitment. It
+  downloads, speaks a sample, and selects itself if you have chosen nothing else.
+- **One recommendation, not three.** Everything else sorts by size ascending,
+  because someone ignoring the badge is usually looking for the cheapest
+  download.
+- **Downloads can be cancelled**, and are checked against free disk space before
+  the first byte — for three times the download, since the archive, its unpacked
+  contents and the staging directory all exist at once.
+- Verified by SHA-256 and unpacked atomically. A model that fails its checksum
+  installs **nothing** — no directory, no partial file.
 - British voices automatically get the British pronunciation table; the rest get
   the American one.
 
-### Menu bar
+### Window and menu bar
 
-No window at all. The menu tells you what it cannot otherwise show:
+The window holds the reader, the library and the voices. Closing it leaves
+Lector running in the menu bar, where the menu says what it otherwise could not:
 
 - one item that changes verb between *Speak Selection* and *Stop Speaking*
 - a line that says Accessibility permission is missing, and opens the prompt
@@ -94,6 +138,23 @@ is what a hotkey feels like.
 > On Apple silicon, Kokoro's **int8 build is slower than fp32** (0.96 vs 0.41 in
 > published figures) — ARM pays a dequantisation tax the smaller weights never
 > earn back. Piper is the opposite. Re-measure before "optimising" either.
+
+Because synthesis beats real time by six or seven times, a book never needs to be
+pre-generated: the sound card is the bottleneck, and it throttles synthesis by
+itself through a full ring buffer. That is also why "how far ahead should we
+generate" is not a setting.
+
+*Pride and Prejudice*, as a check that import is not the slow part:
+
+| | as EPUB | as plain text |
+|---|---|---|
+| Chapters found | 76 | 61 |
+| Words | 129,609 | 130,296 |
+| Extraction warnings | 0 | — |
+
+The two disagree because the EPUB edition lists its illustration plates in its
+own table of contents and the text edition has no heading for chapter one. Both
+are faithful to the file they came from.
 
 ## Install
 
@@ -203,12 +264,17 @@ Lector*) needs no Accessibility permission at all and works regardless.
 ### Exercising the pieces
 
 ```sh
-cargo test --workspace                      # 32 tests
+cargo test --workspace                      # 114 tests
 cargo test --workspace -- --ignored         # + real model downloads
 
 cargo run -p lector-text --example demo     # see how text is chunked
 cargo run -p lector-engine --bin demo       # latency, interrupt, stop
 cargo run -p lector-engine --bin spike      # RTF and streaming, one model
+cargo run -p lector-engine --bin clock      # prove the highlight follows audio
+
+cargo run -p lector-book --example import -- book.epub     # see what would be read
+cargo run -p lector-book --example import -- paper.pdf     # ...before hearing it
+cargo run -p lector-book --example browse -- austen        # search Gutenberg
 
 LECTOR_MODEL=models/kokoro-multi-lang-v1_0 LECTOR_SID=3 \
   cargo run -p lector-engine --bin spike    # ...or another
@@ -220,9 +286,10 @@ python3 scripts/make-icons.py               # regenerate icons
 ## Architecture
 
 ```
-crates/lector-text     markdown -> speakable chunks.  Pure, 29 tests.
-crates/lector-engine   catalog, installer, synthesis actor, audio output.
-src-tauri              tray, hotkey, selection capture, Services menu.
+crates/lector-text     markdown -> speakable chunks.  Pure, dependency-light.
+crates/lector-book     epub, text, pdf, web, free-book catalogues, the library.
+crates/lector-engine   catalog, installer, synthesis actor, audio output, clock.
+src-tauri              window, tray, hotkey, selection capture, Services menu.
 ```
 
 **One thread owns the model and the audio device.** They have to share one anyway
@@ -241,6 +308,17 @@ window, so there would be no `<audio>` element to use. It also avoids the wall
 every webview-based TTS app hits: autoplay policy, throttled background timers,
 and audio marshalled over IPC.
 
+**One enumeration drives both the voice and the view.** A document is split into
+chunks exactly once; the engine speaks `units[i]`, the window renders the same
+list, the highlight is an index into it, and a resume marker is that same index.
+Nothing re-derives any of it, so nothing can disagree about where the voice is.
+This is borrowed from readest, which restates the rule in four separate files.
+
+**The position clock counts rendered frames, not elapsed time.** A mark becomes
+true when the sound card has actually popped the samples before it. Counting
+buffers served from an empty ring would let idle time advance the clock and drift
+every highlight after it.
+
 **Chunking balances two opposing pressures.** A sentence synthesized alone gets no
 prosodic context, so a bare "Okay." lands as a clipped bark — hence a 100-char
 floor. But the first chunk sets the latency you feel, so it is exempt and goes out
@@ -253,14 +331,21 @@ makes loudness pump between sentences by boosting quiet ones to match loud ones.
 
 ## Roadmap
 
-Lector is built in phases. The first two are done.
-
 - [x] **Engine** — streaming synthesis, immediate cancellation, native playback
 - [x] **Hotkey** — tray, global hotkey, Services menu, selection capture
 - [x] **Voices** — catalog, verified downloads, Kokoro, voice and speed pickers
+- [x] **Reading** — position clock, pause, seek, follow-along highlighting
+- [x] **Books** — EPUB, text, Markdown, PDF, web articles, and a library
+- [x] **Free books** — Project Gutenberg search and Standard Ebooks releases
+- [x] **Model manager** — audition-as-download, cancellation, disk check
 - [ ] **Narrate an agent** — speak Claude Code's output by tailing its transcripts
-- [ ] **Long-form listening** — import EPUB and Markdown, queue, resume, bookmarks
 - [ ] **Studio** — script editor, per-paragraph voices, export to WAV
+
+Deliberately deferred: word-level highlighting (it needs forced alignment, which
+is another model and another failure mode, for the last 10% of the value),
+pre-synthesising a book for offline playback (at RTF 0.15 synthesis is already
+faster than listening, so the cache buys little and costs invalidation bugs),
+MOBI and AZW, and cloud sync of reading position.
 
 Deliberately out of scope: voice cloning (needs a model class that would break
 the no-Python rule), speech-to-text (that is Vox), and any cloud fallback tier
@@ -283,11 +368,17 @@ Built on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) by the k2-fsa
 project, with [Piper](https://github.com/rhasspy/piper) and
 [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) voices.
 
+Books come from [Project Gutenberg](https://www.gutenberg.org) and
+[Standard Ebooks](https://standardebooks.org), both of which give away carefully
+prepared public-domain texts and deserve support.
+
 The design owes a lot to reading [verba](https://github.com/nuvocode/verba)
-(in-process sherpa-onnx with no sidecar, and the model installer),
-[companion-tts](https://github.com/kleenpulse/companion-tts) (the prefetch queue
-and its invariants), [readest](https://github.com/readest/readest) (trim the
-engine's silence and insert your own gap), and
+(in-process sherpa-onnx with no sidecar, the model installer, and *the audition
+is the download*), [companion-tts](https://github.com/kleenpulse/companion-tts)
+(the prefetch queue and its invariants),
+[readest](https://github.com/readest/readest) (trim the engine's silence and
+insert your own gap; one enumeration for the voice and the view; files and JSON
+rather than a database), and
 [vocal](https://github.com/skartik-sk/vocal) (the Services menu as a zero-window
 entry point).
 
