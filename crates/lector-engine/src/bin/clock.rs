@@ -49,9 +49,18 @@ fn main() {
     println!("{:>6}  {:>10}  text", "chunk", "audible at");
     println!("{}", "-".repeat(64));
     let mut seen = 0;
-    while seen < chunks.len() {
+    let mut ended_at: Option<f64> = None;
+    // One more than the chunk count: the engine reports an end mark at
+    // `index == total`, which is what a chapter change hangs off.
+    while seen <= chunks.len() {
         match rx.recv_timeout(std::time::Duration::from_secs(30)) {
             Ok((p, at)) => {
+                if p.index >= p.total {
+                    println!("{:>6}  {:>9.2}s  <end of document>", "end", at);
+                    ended_at = Some(at);
+                    seen += 1;
+                    continue;
+                }
                 let c = &chunks[p.index];
                 println!(
                     "{:>6}  {:>9.2}s  {}",
@@ -85,6 +94,18 @@ fn main() {
         println!("PASS: paced by playback, not synthesis");
     } else {
         println!("FAIL: too fast to be real playback -- marks are firing at synthesis time");
+    }
+
+    // The end mark is what moves a book to its next chapter, so it has to
+    // arrive after the last words are audible, not when synthesis finished.
+    match ended_at {
+        Some(at) if at >= elapsed - 0.5 => {
+            println!("PASS: end reported after the last chunk was heard")
+        }
+        Some(at) => {
+            println!("FAIL: end reported at {at:.2}s, before playback finished at {elapsed:.2}s")
+        }
+        None => println!("FAIL: no end-of-document mark arrived"),
     }
     std::thread::sleep(std::time::Duration::from_secs(4));
 

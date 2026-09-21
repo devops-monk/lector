@@ -96,6 +96,17 @@ impl PlaybackState {
         self.frames_pushed.load(Ordering::Acquire)
     }
 
+    /// True while audio already generated has not been heard yet.
+    ///
+    /// Synthesis runs several times faster than speech, so "the actor has
+    /// finished" and "the voice has finished" are seconds apart -- long enough
+    /// that a UI keyed on the former closes the reading view mid-sentence.
+    /// Both counters share an origin, reset together by a flush, so their
+    /// difference is exactly the audio still queued.
+    pub fn draining(&self) -> bool {
+        self.frames_rendered() < self.frames_pushed()
+    }
+
     /// Pauses or resumes playback.
     ///
     /// Gated at the consumer rather than the producer, which buys three things

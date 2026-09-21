@@ -147,8 +147,14 @@ impl Handle {
         self.state.is_paused()
     }
 
+    /// True while anything is still to be heard.
+    ///
+    /// Deliberately not just "the actor is busy": at RTF 0.15 the actor
+    /// finishes a paragraph long before the sound card does, and a caller that
+    /// believed it would put the text box back while the voice was still
+    /// reading from it.
     pub fn is_speaking(&self) -> bool {
-        self.speaking.load(Ordering::Relaxed)
+        self.speaking.load(Ordering::Relaxed) || self.state.draining()
     }
 
     pub fn level(&self) -> f32 {
@@ -334,6 +340,11 @@ impl Actor {
                 Command::Shutdown => return,
                 Command::Stop => {
                     self.out.borrow_mut().resampler.reset();
+                    // Settle here, on the only thread allowed to: `stop` cut
+                    // the sound from another thread but left `frames_pushed`
+                    // holding the discarded job's length, which would read as
+                    // audio still waiting to be heard for the rest of the run.
+                    self.state.flush_and_settle();
                     self.speaking.store(false, Ordering::Relaxed);
                 }
                 Command::Read(job) => {
@@ -419,6 +430,19 @@ impl Actor {
                 }
             }
         }
+        self.mark_end(generation, chunks.len());
+    }
+
+    /// Marks the end of a document, one index past the last chunk.
+    ///
+    /// The end is a mark like any other, so it becomes true when the last
+    /// sample is *heard* rather than when the last one is generated. Anything
+    /// that happens at the end of a chapter -- moving to the next one, putting
+    /// the text box back -- has to wait for the voice, and this is what lets it.
+    fn mark_end(&mut self, generation: u64, total: usize) {
+        if self.generation.load(Ordering::Acquire) == generation {
+            self.state.mark(generation, total);
+        }
     }
 
     fn speak(&mut self, generation: u64, chunks: &[String], speed: f32) {
@@ -442,6 +466,7 @@ impl Actor {
             self.state.mark(generation, i);
             self.synthesize(generation, chunk, speed);
         }
+        self.mark_end(generation, chunks.len());
     }
 
     /// Returns whether the model produced audio.

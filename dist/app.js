@@ -74,7 +74,7 @@ function render() {
   $("pause").textContent = snap.paused ? "Resume" : "Pause";
 
   // Speaking finished on its own: go back to whatever the pane was showing.
-  if (!snap.speaking && !$("follow").hidden) hideFollow();
+  if (!snap.speaking && !advancing && !$("follow").hidden) hideFollow();
 
   $("speed").value = snap.speed;
   $("speedval").textContent = `${Number(snap.speed).toFixed(2).replace(/0$/, "")}×`;
@@ -214,6 +214,14 @@ function hideFollow() {
   chunks = [];
 }
 
+// When the reader last scrolled by hand. Auto-scroll stands down for a few
+// seconds afterwards: a view that yanks itself back while someone is reading
+// ahead is worse than one that never scrolls at all.
+let scrolledAt = 0;
+const SCROLL_TRUCE = 4000;
+$("follow").addEventListener("wheel", () => (scrolledAt = Date.now()), { passive: true });
+$("follow").addEventListener("touchmove", () => (scrolledAt = Date.now()), { passive: true });
+
 function highlight(index) {
   const box = $("follow");
   box.querySelectorAll(".chunk").forEach((el) => {
@@ -221,6 +229,7 @@ function highlight(index) {
     el.classList.toggle("now", i === index);
     el.classList.toggle("spoken", i < index);
   });
+  if (Date.now() - scrolledAt < SCROLL_TRUCE) return;
   // Scroll only when the highlight would otherwise be off screen. Auto-scroll
   // that fires on every chunk fights a reader who has scrolled deliberately.
   const cur = box.querySelector(".chunk.now");
@@ -292,10 +301,43 @@ $("pause").onclick = async () => {
   render();
 };
 
+// True between one chapter ending and the next one starting, so the
+// speaking-state poll does not tear the reading view down in the gap.
+let advancing = false;
+
 listen("reading", (e) => {
-  if (!$("follow").hidden) highlight(e.payload.index);
-  if (book) book.unit = e.payload.index;
+  const { index, total } = e.payload;
+  // One past the last chunk is the engine saying the last sample has been
+  // *heard*, not merely generated. Everything that happens at the end of a
+  // chapter hangs off this.
+  if (total && index >= total) {
+    ended();
+    return;
+  }
+  if (!$("follow").hidden) highlight(index);
+  if (book) book.unit = index;
 });
+
+async function ended() {
+  if (!book) {
+    hideFollow();
+    return;
+  }
+  const next = book.chapter + 1;
+  if (next >= book.chapters.length) {
+    // The end of the book. Back to the chapter list rather than silence with
+    // a stale highlight sitting on the last line.
+    book.unit = 0;
+    hideFollow();
+    return;
+  }
+  advancing = true;
+  try {
+    await readChapter(next, 0);
+  } finally {
+    advancing = false;
+  }
+}
 
 // ---- the library ---------------------------------------------------------
 //
@@ -496,7 +538,7 @@ offerResume();
 // Speaking state is polled rather than pushed: it changes far faster than
 // anything worth an event, and the window is often not visible.
 setInterval(async () => {
-  if (document.hidden) return;
+  if (document.hidden || advancing) return;
   const s = await invoke("snapshot");
   if (s.speaking !== snap?.speaking || s.ready !== snap?.ready) {
     snap = s;
