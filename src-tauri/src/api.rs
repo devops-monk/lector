@@ -146,6 +146,9 @@ pub fn read_document(text: String, from: usize, state: State<Arc<App>>) -> Vec<S
     // position saved under it would not survive a reopen.
     let chunks = Arc::new(lector_text::prepare(&text, SanitizeOptions::READING, false));
     *state.doc.lock().unwrap() = Some(chunks.clone());
+    // Pasted text is not part of any book, so leave whichever one was open --
+    // otherwise this reading would be recorded as progress through it.
+    *state.open.lock().unwrap() = None;
     state.bookmark.begin(&text, from, chunks.len());
     if let Some(l) = state.lector.lock().unwrap().as_ref() {
         l.read(chunks.clone(), from);

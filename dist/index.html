@@ -11,15 +11,27 @@
   <div id="app">
     <aside id="side">
       <header>
-        <h2>Voices</h2>
+        <div id="tabs">
+          <button class="tab on" data-tab="voices">Voices</button>
+          <button class="tab" data-tab="library">Library</button>
+        </div>
         <span id="count"></span>
       </header>
-      <input id="search" type="search" placeholder="Search voices…" autocomplete="off" spellcheck="false">
-      <div id="models"></div>
+
+      <div id="voicespane">
+        <input id="search" type="search" placeholder="Search voices…" autocomplete="off" spellcheck="false">
+        <div id="models"></div>
+      </div>
+
+      <div id="librarypane" hidden>
+        <button id="import" class="get wide">Add a book…</button>
+        <div id="books"></div>
+      </div>
     </aside>
 
     <main id="main">
       <div id="bar">
+        <button id="back" hidden title="Back to the chapter list">‹</button>
         <div id="now">No voice<small></small></div>
         <span class="sp"></span>
         <span id="hint">Select text anywhere · <kbd>⌥⇧Space</kbd></span>
@@ -38,6 +50,7 @@
 
       <div id="pane">
         <div id="level" aria-hidden="true"><i></i></div>
+        <div id="chapters" hidden></div>
         <div id="follow" hidden></div>
         <textarea id="text" spellcheck="false"
           placeholder="Type or paste anything here, then press Speak.&#10;&#10;Or select text in any other app and press ⌥⇧Space."></textarea>

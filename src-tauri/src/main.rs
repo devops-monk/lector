@@ -9,6 +9,7 @@
 //! second implementation.
 
 mod api;
+mod books;
 pub mod reading;
 mod selection;
 #[cfg(target_os = "macos")]
@@ -19,6 +20,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use books::Open;
+use lector_book::Library;
 use lector_engine::catalog::{self, Model};
 use lector_engine::install::{self, Cancel, Phase};
 use lector_engine::{Lector, Voice};
@@ -47,6 +50,11 @@ pub struct App {
     /// How far into the current document the voice had read. Written from the
     /// position callback, so it is the audible position, not the synthesized one.
     pub bookmark: Bookmark,
+    /// The shelf. Cheap to hold: it is a path and reads the disk on demand.
+    pub library: Library,
+    /// Which book and chapter is being read, if any. Decides whether the
+    /// position callback writes to the library or to the bookmark.
+    pub open: Mutex<Option<Open>>,
     settings: Mutex<Settings>,
     data_dir: PathBuf,
     /// Set once, immediately after construction, so callbacks can reach back
@@ -162,7 +170,16 @@ impl App {
                 let state = self.clone_for_callback();
                 match Lector::with_voice_and_position(voice, move |p| {
                     if let Some(state) = state.upgrade() {
-                        state.bookmark.mark(p.index);
+                        // One position, two places it can belong. A book keeps
+                        // its own, beside the book; anything else is the
+                        // bookmark for pasted text.
+                        let open = state.open.lock().unwrap().clone();
+                        match open {
+                            Some(o) => {
+                                state.library.set_progress(&o.book, o.chapter, p.index);
+                            }
+                            None => state.bookmark.mark(p.index),
+                        }
                     }
                     if let Some(app) = app.as_ref() {
                         let _ = app.emit(
@@ -308,6 +325,7 @@ fn main() {
     let hotkey_state = app_state.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |_app, shortcut, event| {
@@ -333,6 +351,14 @@ fn main() {
             api::seek,
             api::reading_state,
             api::forget_reading,
+            books::library,
+            books::import_book,
+            books::open_book,
+            books::read_chapter,
+            books::chapter_text,
+            books::cover,
+            books::remove_book,
+            books::close_book,
             api::pause,
             api::resume,
             api::stop,
@@ -354,6 +380,8 @@ fn main() {
                 doc: Mutex::new(None),
                 app: Mutex::new(Some(app.handle().clone())),
                 bookmark: Bookmark::load(&data_dir),
+                library: Library::new(&data_dir),
+                open: Mutex::new(None),
                 weak: Mutex::new(std::sync::Weak::new()),
                 settings: Mutex::new(settings),
                 data_dir,

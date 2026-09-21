@@ -13,8 +13,12 @@ tauri-build = { version = "2", features = [] }
 # reusing the bundle icon, which is a colour icon and wrong for a menu bar.
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-global-shortcut = "2"
+# The file picker for importing a book. There is no other way to get a path
+# from the user: a webview drop gives a File, not a location on disk.
+tauri-plugin-dialog = "2"
 lector-engine = { path = "../crates/lector-engine" }
 lector-text = { path = "../crates/lector-text" }
+lector-book = { path = "../crates/lector-book" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"

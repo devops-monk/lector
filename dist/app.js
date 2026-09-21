@@ -18,6 +18,11 @@ const el = (tag, cls, text) => {
 
 let snap = null;
 let filter = "";
+// The book currently opened in the main pane, as returned by open_book. Null
+// means the pane is showing pasted text, which is also where the app starts.
+let book = null;
+let shelf = [];
+const covers = new Map();   // book id -> data URL, fetched once
 const open = new Set();          // which model rows are expanded
 const progress = new Map();      // model id -> {received, total, phase}
 
@@ -68,7 +73,7 @@ function render() {
   $("pause").hidden = !snap.speaking;
   $("pause").textContent = snap.paused ? "Resume" : "Pause";
 
-  // Speaking finished on its own: put the editable box back.
+  // Speaking finished on its own: go back to whatever the pane was showing.
   if (!snap.speaking && !$("follow").hidden) hideFollow();
 
   $("speed").value = snap.speed;
@@ -194,11 +199,18 @@ function showFollow(cs) {
   });
   box.hidden = false;
   $("text").hidden = true;
+  $("chapters").hidden = true;
 }
 
 function hideFollow() {
   $("follow").hidden = true;
-  $("text").hidden = false;
+  // A book returns to its chapter list; pasted text returns to the box it was
+  // pasted into. Either way the pane shows what it showed before.
+  if (book) {
+    $("chapters").hidden = false;
+  } else {
+    $("text").hidden = false;
+  }
   chunks = [];
 }
 
@@ -264,6 +276,11 @@ $("go").onclick = async () => {
   // One call: it enumerates, starts reading, and returns the very chunks the
   // engine is speaking. Asking separately would be two enumerations.
   $("resume").hidden = true;
+  // Pasted text is not part of a book, and the backend clears the open book on
+  // this call; the window has to agree or Back would go nowhere.
+  book = null;
+  $("back").hidden = true;
+  renderBooks();
   const cs = await invoke("read_document", { text, from: 0 });
   if (cs.length) showFollow(cs);
 };
@@ -277,7 +294,167 @@ $("pause").onclick = async () => {
 
 listen("reading", (e) => {
   if (!$("follow").hidden) highlight(e.payload.index);
+  if (book) book.unit = e.payload.index;
 });
+
+// ---- the library ---------------------------------------------------------
+//
+// Books are imported once and read from disk after that. The window holds no
+// copy of a book's text: it asks for a chapter's chunks when it needs them, so
+// the chunks it highlights are the ones the engine was handed.
+
+let tab = "voices";
+
+function showTab(which) {
+  tab = which;
+  document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === which));
+  $("voicespane").hidden = which !== "voices";
+  $("librarypane").hidden = which !== "library";
+  $("count").textContent =
+    which === "voices" ? `${snap?.voice_count ?? 0} voices` : `${shelf.length} book${shelf.length === 1 ? "" : "s"}`;
+  if (which === "library") refreshLibrary();
+}
+
+document.querySelectorAll(".tab").forEach((b) => {
+  b.onclick = () => showTab(b.dataset.tab);
+});
+
+async function refreshLibrary() {
+  shelf = await invoke("library");
+  if (tab === "library") {
+    $("count").textContent = `${shelf.length} book${shelf.length === 1 ? "" : "s"}`;
+  }
+  renderBooks();
+}
+
+function renderBooks() {
+  const box = $("books");
+  box.innerHTML = "";
+  if (!shelf.length) {
+    box.append(el("div", "empty", "No books yet. Add an EPUB to get started."));
+    return;
+  }
+  for (const b of shelf) {
+    const row = el("div", "bookrow");
+    if (book && book.id === b.id) row.classList.add("on");
+
+    const art = el("div", "cover");
+    if (b.cover) {
+      const img = document.createElement("img");
+      const cached = covers.get(b.id);
+      if (cached) {
+        img.src = cached;
+      } else {
+        // Fetched lazily and once: covers are tens of kilobytes and the shelf
+        // is re-rendered on every change.
+        invoke("cover", { id: b.id }).then((url) => {
+          if (url) {
+            covers.set(b.id, url);
+            img.src = url;
+          }
+        });
+      }
+      art.append(img);
+    } else {
+      art.append(el("span", null, b.title.slice(0, 1).toUpperCase()));
+    }
+
+    const meta = el("div", "bookmeta");
+    meta.append(el("div", "booktitle", b.title));
+    meta.append(el("div", "bookby", b.author || `${b.chapters} chapters`));
+
+    const del = el("button", "play", "×");
+    del.title = "Remove this book";
+    del.onclick = (e) => {
+      e.stopPropagation();
+      invoke("remove_book", { id: b.id }).catch(() => {});
+      if (book && book.id === b.id) closeBook();
+    };
+
+    row.append(art, meta, del);
+    row.onclick = () => openBook(b.id);
+    box.append(row);
+  }
+}
+
+$("import").onclick = () => invoke("import_book");
+
+async function openBook(id) {
+  const v = await invoke("open_book", { id });
+  if (!v) return;
+  book = v;
+  renderBooks();
+  showChapters();
+}
+
+function closeBook() {
+  book = null;
+  invoke("close_book");
+  $("chapters").hidden = true;
+  $("follow").hidden = true;
+  $("text").hidden = false;
+  $("back").hidden = true;
+  renderBooks();
+}
+
+function showChapters() {
+  const box = $("chapters");
+  box.innerHTML = "";
+
+  const head = el("div", "chaphead");
+  head.append(el("div", "chaptitle", book.title));
+  head.append(el("div", "chapby", book.author || ""));
+  if (book.warnings > 5) {
+    // Said rather than discovered by ear: a rough extraction sounds like a
+    // broken app, and the reader deserves to know which it is.
+    head.append(el("div", "chapwarn", `This book's markup was uneven — ${book.warnings} spots were repaired on import, so a few passages may read oddly.`));
+  }
+  box.append(head);
+
+  book.chapters.forEach((title, i) => {
+    const row = el("div", "chapter");
+    if (i === book.chapter) row.classList.add("at");
+    row.append(el("span", "n", String(i + 1)));
+    row.append(el("span", "t", title));
+    if (i === book.chapter && book.unit > 0) row.append(el("span", "where", "where you left off"));
+    row.onclick = () => readChapter(i, i === book.chapter ? book.unit : 0);
+    box.append(row);
+  });
+
+  box.hidden = false;
+  $("text").hidden = true;
+  $("follow").hidden = true;
+  $("back").hidden = true;
+  $("resume").hidden = true;
+}
+
+async function readChapter(i, from) {
+  const cs = await invoke("read_chapter", { id: book.id, chapter: i, from });
+  if (!cs.length) return;
+  book.chapter = i;
+  book.unit = from;
+  showFollow(cs);
+  if (from > 0) highlight(from);
+  $("back").hidden = false;
+}
+
+$("back").onclick = async () => {
+  await invoke("stop");
+  if (book) {
+    // Re-open rather than reuse: the position moved while it was being read,
+    // and the list should show where the voice actually got to.
+    const v = await invoke("open_book", { id: book.id });
+    if (v) book = v;
+    showChapters();
+  }
+};
+
+listen("imported", (e) => {
+  refreshLibrary();
+  showTab("library");
+  openBook(e.payload.id);
+});
+listen("library", refreshLibrary);
 
 $("speed").oninput = (e) => {
   $("speedval").textContent = `${Number(e.target.value).toFixed(2).replace(/0$/, "")}×`;
@@ -300,6 +477,7 @@ listen("progress", (e) => {
   if (e.payload.phase === "Done") {
     progress.delete(e.payload.id);
     refresh();
+refreshLibrary();
 offerResume();
   } else {
     renderModels();
@@ -308,6 +486,7 @@ offerResume();
 listen("failed", (e) => {
   progress.delete(e.payload.id);
   refresh();
+refreshLibrary();
 offerResume();
   $("warntext").textContent = e.payload.error;
   $("warnbtn").style.display = "none";
@@ -341,4 +520,5 @@ setInterval(async () => {
 }, 60);
 
 refresh();
+refreshLibrary();
 offerResume();

@@ -1,0 +1,29 @@
+[package]
+name = "lector-book"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# An EPUB is a zip of XHTML, so these two are the whole format. Deliberately not
+# a higher-level epub crate: the ones on crates.io either lose the spine-to-TOC
+# mapping (so chapters have no titles) or abandon a chapter on the first XML
+# error, which real EPUB 2 files produce routinely and which reads as a book
+# that simply stops mid-chapter.
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+# escape-html for the entity table: EPUB XHTML uses the full HTML set --
+# &nbsp;, &mdash;, &rsquo; -- and quick-xml resolves only the five XML ones
+# without it. A dropped entity is a missing character in the narration, and
+# guessing which entities real books use is the kind of assumption that comes
+# back later. It costs about ten seconds of quick-xml's compile time.
+quick-xml = { version = "0.42", features = ["escape-html"] }
+
+sha2 = "0.11.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+lector-text = { path = "../lector-text" }
+
+[dev-dependencies]
+# Writing zips is test-only: the tests build EPUBs in memory rather than
+# checking binary fixtures into the repo, where nobody could review them.
+zip = { version = "2.4", default-features = false }
