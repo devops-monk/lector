@@ -416,3 +416,31 @@ button.primary.stop { background: var(--ink-2); }
   border-color: var(--ok); color: var(--ok); cursor: default;
 }
 .get.done:hover { border-color: var(--ok); color: var(--ok); }
+
+/* Which catalogue a result came from. A chip rather than more grey text:
+   Standard Ebooks editions are proofed and properly typeset, Gutenberg's are
+   raw scans, and that difference is worth seeing rather than reading. */
+.src {
+  margin-left: 7px; padding: 1px 5px; border-radius: 4px;
+  background: var(--paper-3); color: var(--ink-3);
+  font-size: 10px; letter-spacing: .02em;
+}
+.src.good { background: var(--accent-bg); color: var(--accent); }
+
+/* Reading something from the web. Sits under the search because it is the
+   answer to the search that found nothing -- technical books are almost never
+   public domain, and are very often free to read online. */
+#weblink {
+  margin-top: 12px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--paper-2);
+}
+.weblabel { font-size: 11.5px; color: var(--ink-2); line-height: 1.5; }
+.weblabel.dim { color: var(--ink-3); font-size: 11px; margin-top: 6px; }
+#webform { display: flex; gap: 8px; margin: 8px 0 0; }
+#weburl {
+  flex: 1; min-width: 0; padding: 6px 9px;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--paper); color: var(--ink); font: inherit; font-size: 12px;
+}
+#weburl:focus { outline: 2px solid var(--accent); outline-offset: -1px; }

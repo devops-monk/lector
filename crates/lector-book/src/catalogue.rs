@@ -20,6 +20,7 @@ use crate::{epub, Book};
 
 const GUTENBERG_SEARCH: &str = "https://www.gutenberg.org/ebooks/search/?format=opds&query=";
 const STANDARD_EBOOKS_NEW: &str = "https://standardebooks.org/feeds/atom/new-releases";
+const STANDARD_EBOOKS_SEARCH: &str = "https://standardebooks.org/ebooks?query=";
 
 /// A book offered by a catalogue, not yet downloaded.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -37,14 +38,77 @@ pub struct Listing {
     pub url: String,
 }
 
-/// Searches Project Gutenberg.
+/// Searches both catalogues at once.
+///
+/// One search box rather than a source to pick first: nobody looking for a
+/// book wants to be asked which archive it might be in. The two run
+/// concurrently, because doing them in sequence would make every search as
+/// slow as the slower catalogue.
+///
+/// Standard Ebooks comes first when both have a title. Their editions are
+/// properly typeset and proofed, and for a book that exists in both that is
+/// simply the better copy.
 pub fn search(query: &str) -> Result<Vec<Listing>, String> {
-    let q = query.trim();
+    let q = query.trim().to_string();
     if q.is_empty() {
         return Ok(Vec::new());
     }
-    let feed = fetch_text(&format!("{GUTENBERG_SEARCH}{}", escape_query(q)))?;
+
+    let se_q = q.clone();
+    let se = std::thread::spawn(move || search_standard_ebooks(&se_q));
+    let gutenberg = search_gutenberg(&q);
+    let se = se.join().unwrap_or_else(|_| Ok(Vec::new()));
+
+    // One catalogue being down is a thinner result, not a failed search. Both
+    // failing is worth reporting, and reports whichever error we have.
+    let mut out = se.unwrap_or_default();
+    match gutenberg {
+        Ok(g) => out.extend(g),
+        Err(e) if out.is_empty() => return Err(e),
+        Err(_) => {}
+    }
+    dedupe(&mut out);
+    Ok(out)
+}
+
+/// Drops repeats of the same work.
+///
+/// Gutenberg carries several scans of a popular book -- "dracula" comes back
+/// four times -- and a shelf that offers the same title four times makes the
+/// reader choose between things that are not different. The first survives,
+/// and since Standard Ebooks is merged first, that is the better edition.
+fn dedupe(list: &mut Vec<Listing>) {
+    let mut seen = std::collections::HashSet::new();
+    list.retain(|l| seen.insert((normalize(&l.title), normalize(&l.author))));
+}
+
+/// Case and punctuation folded away, so "The Pickwick Papers." and "the
+/// pickwick papers" are one book.
+fn normalize(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Searches Project Gutenberg.
+pub fn search_gutenberg(query: &str) -> Result<Vec<Listing>, String> {
+    let feed = fetch_text(&format!("{GUTENBERG_SEARCH}{}", escape_query(query)))?;
     Ok(gutenberg(&feed))
+}
+
+/// Searches Standard Ebooks.
+///
+/// Their OPDS feed covers only new releases unless you are a patron, but the
+/// ordinary search page is public and marked up in RDFa -- `schema:Book`,
+/// `schema:name`, `schema:author` -- which is machine-readable by design
+/// rather than by accident, and so is a fair thing to read.
+pub fn search_standard_ebooks(query: &str) -> Result<Vec<Listing>, String> {
+    let page = fetch_text(&format!("{STANDARD_EBOOKS_SEARCH}{}", escape_query(query)))?;
+    Ok(standard_ebooks_page(&page))
 }
 
 /// The Standard Ebooks new-releases shelf.
@@ -172,6 +236,68 @@ fn standard_ebooks(feed: &str) -> Vec<Listing> {
             bytes: length,
             url: href,
         });
+    }
+    out
+}
+
+/// Parses a Standard Ebooks listing page.
+///
+/// Each result is `<li typeof="schema:Book" about="/ebooks/<author>/<slug>">`
+/// holding two `schema:name` spans: the title, then the author.
+fn standard_ebooks_page(page: &str) -> Vec<Listing> {
+    let mut out = Vec::new();
+    for block in page.split("typeof=\"schema:Book\"").skip(1) {
+        let Some(path) = attr(block, "about").filter(|p| p.starts_with("/ebooks/")) else {
+            continue;
+        };
+        // "/ebooks/charles-dickens/great-expectations" -> the two parts the
+        // download file is named after.
+        let mut parts = path.trim_start_matches("/ebooks/").split('/');
+        let (Some(author_slug), Some(slug)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if slug.is_empty() || parts.next().is_some() {
+            continue; // an author page, not a book
+        }
+
+        let names = schema_names(block);
+        let Some(title) = names.first().cloned() else {
+            continue;
+        };
+        out.push(Listing {
+            id: format!("se-{author_slug}_{slug}"),
+            title,
+            author: names.get(1).cloned().unwrap_or_default(),
+            source: "Standard Ebooks".into(),
+            note: String::new(),
+            bytes: 0,
+            // source=feed is not decoration: without it the download URL
+            // serves a "Your Download Has Started!" page instead of the book,
+            // and what arrives is 9 KB of HTML that fails to parse as an EPUB.
+            url: format!(
+                "https://standardebooks.org/ebooks/{author_slug}/{slug}/downloads/{author_slug}_{slug}.epub?source=feed"
+            ),
+        });
+    }
+    out
+}
+
+/// The text of each `property="schema:name"` span in a block, in order.
+fn schema_names(block: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for piece in block.split("property=\"schema:name\"").skip(1) {
+        let Some(open) = piece.find('>') else {
+            continue;
+        };
+        let Some(close) = piece[open..].find("</") else {
+            continue;
+        };
+        let raw = &piece[open + 1..open + close];
+        let text = crate::html::to_text(&format!("<p>{raw}</p>")).text;
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !text.is_empty() {
+            out.push(text);
+        }
     }
     out
 }
@@ -352,6 +478,30 @@ mod tests {
     }
 
     #[test]
+    fn the_same_book_is_not_offered_four_times() {
+        let mk = |title: &str, author: &str, source: &str| Listing {
+            id: format!("{source}-{title}"),
+            title: title.into(),
+            author: author.into(),
+            source: source.into(),
+            note: String::new(),
+            bytes: 0,
+            url: String::new(),
+        };
+        let mut list = vec![
+            mk("Dracula", "Bram Stoker", "Standard Ebooks"),
+            mk("dracula", "bram stoker", "Project Gutenberg"),
+            mk("Dracula.", "Bram Stoker", "Project Gutenberg"),
+            mk("Dracula's Guest", "Bram Stoker", "Project Gutenberg"),
+        ];
+        dedupe(&mut list);
+        assert_eq!(list.len(), 2, "{list:#?}");
+        // The better edition is the one that survives.
+        assert_eq!(list[0].source, "Standard Ebooks");
+        assert_eq!(list[1].title, "Dracula's Guest");
+    }
+
+    #[test]
     fn queries_are_escaped() {
         assert_eq!(escape_query("jane austen"), "jane+austen");
         assert_eq!(escape_query("a&b"), "a%26b");
@@ -361,5 +511,48 @@ mod tests {
     #[test]
     fn an_empty_search_does_not_reach_the_network() {
         assert_eq!(search("   ").unwrap().len(), 0);
+    }
+
+    // The shape of a real result, trimmed. Two schema:name spans per book:
+    // the title, then the author.
+    const SE_PAGE: &str = r#"<ol>
+      <li typeof="schema:Book" about="/ebooks/charles-dickens/great-expectations">
+        <p><a href="/ebooks/charles-dickens/great-expectations" property="schema:url"><span property="schema:name">Great Expectations</span></a></p>
+        <p class="author" property="schema:author"><a href="/ebooks/charles-dickens"><span property="schema:name">Charles Dickens</span></a></p>
+      </li>
+      <li typeof="schema:Book" about="/ebooks/leo-tolstoy/war-and-peace/louise-maude">
+        <p><span property="schema:name">War and Peace</span></p>
+      </li>
+      <li typeof="schema:Person" about="/ebooks/charles-dickens">
+        <p><span property="schema:name">Charles Dickens</span></p>
+      </li>
+    </ol>"#;
+
+    #[test]
+    fn standard_ebooks_search_reads_titles_authors_and_download_urls() {
+        let out = standard_ebooks_page(SE_PAGE);
+        assert_eq!(out.len(), 1, "{out:#?}");
+        assert_eq!(out[0].title, "Great Expectations");
+        assert_eq!(out[0].author, "Charles Dickens");
+        assert_eq!(out[0].source, "Standard Ebooks");
+        assert_eq!(
+            out[0].url,
+            "https://standardebooks.org/ebooks/charles-dickens/great-expectations/downloads/charles-dickens_great-expectations.epub?source=feed"
+        );
+    }
+
+    #[test]
+    fn the_download_url_carries_the_feed_marker() {
+        // Without it Standard Ebooks serves an interstitial page, and 9 KB of
+        // HTML arrives where a book should be.
+        assert!(standard_ebooks_page(SE_PAGE)[0]
+            .url
+            .ends_with("?source=feed"));
+    }
+
+    #[test]
+    fn author_pages_are_not_offered_as_books() {
+        let out = standard_ebooks_page(SE_PAGE);
+        assert!(!out.iter().any(|l| l.title == "Charles Dickens"));
     }
 }

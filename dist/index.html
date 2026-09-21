@@ -59,10 +59,22 @@
         <div id="browse" hidden>
           <div id="browsehead">
             <form id="browseform">
-              <input id="bq" type="search" placeholder="Search Project Gutenberg…"
+              <input id="bq" type="search" placeholder="Search by title or author…"
                      autocomplete="off" spellcheck="false">
             </form>
             <div id="browsenote" class="chapby"></div>
+
+            <div id="weblink">
+              <div class="weblabel">Technical books are rarely public domain, but many are free
+                to read online. Paste a chapter's address to have it read to you.</div>
+              <form id="webform">
+                <input id="weburl" type="url" spellcheck="false" autocomplete="off"
+                       placeholder="https://doc.rust-lang.org/book/ch01-01-installation.html">
+                <button class="get" type="submit">Add</button>
+              </form>
+              <div class="weblabel dim">Works well on documentation sites and online books —
+                The Rust Book, Pro Git, Eloquent JavaScript. One page at a time.</div>
+            </div>
           </div>
           <div id="results"></div>
         </div>

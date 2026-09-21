@@ -534,8 +534,8 @@ async function openBrowse(query) {
   try {
     results = await invoke("browse", { query });
     $("browsenote").textContent = query
-      ? `${results.length} result${results.length === 1 ? "" : "s"} from Project Gutenberg`
-      : "Recently released by Standard Ebooks — carefully typeset public-domain books.";
+      ? `${results.length} result${results.length === 1 ? "" : "s"} from Standard Ebooks and Project Gutenberg`
+      : "Recently released by Standard Ebooks — carefully typeset public-domain books. Search above for anything else.";
     renderResults();
   } catch (e) {
     $("browsenote").textContent = String(e);
@@ -545,6 +545,17 @@ async function openBrowse(query) {
 $("browseform").onsubmit = (e) => {
   e.preventDefault();
   openBrowse($("bq").value.trim());
+};
+
+// The same import as the sidebar's, offered where somebody looking for a book
+// is actually looking.
+$("webform").onsubmit = (e) => {
+  e.preventDefault();
+  const url = $("weburl").value.trim();
+  if (!url) return;
+  $("weburl").value = "";
+  $("browsenote").textContent = `Fetching ${url}…`;
+  invoke("import_url", { url });
 };
 
 function renderResults() {
@@ -558,8 +569,13 @@ function renderResults() {
     const row = el("div", "result");
     const meta = el("div", "bookmeta");
     meta.append(el("div", "booktitle", r.title));
-    const by = [r.author, r.source].filter(Boolean).join(" · ");
-    meta.append(el("div", "bookby", by));
+    const by = el("div", "bookby");
+    if (r.author) by.append(r.author);
+    // The catalogue named as a chip rather than as more grey text: which shelf
+    // a book comes from decides how well it is typeset, so it is worth seeing
+    // at a glance rather than reading.
+    by.append(el("span", "src" + (r.source === "Standard Ebooks" ? " good" : ""), r.source));
+    meta.append(by);
     if (r.note) meta.append(el("div", "resultnote", r.note));
 
     const have = shelf.some((b) => b.title === r.title && (!r.author || b.author === r.author));
