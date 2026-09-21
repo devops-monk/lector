@@ -16,7 +16,7 @@ mod selection;
 mod services;
 pub mod settings;
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -60,9 +60,13 @@ pub struct App {
     /// Set once, immediately after construction, so callbacks can reach back
     /// into the app without an ownership cycle.
     weak: Mutex<std::sync::Weak<App>>,
-    /// Model ids with a download in flight. A set rather than a flag so two
-    /// concurrent downloads cannot cancel or duplicate each other.
-    installing: Mutex<HashSet<String>>,
+    /// Downloads in flight, each with the token that stops it.
+    ///
+    /// A map rather than a set of ids: `install::Cancel` has always existed and
+    /// always been checked, but the handle was constructed and dropped on the
+    /// spot, so a 349 MB download could not be stopped once it began. Keeping
+    /// it here is the whole of the fix.
+    installing: Mutex<HashMap<String, Cancel>>,
 }
 
 impl App {
@@ -264,10 +268,36 @@ pub fn install_model(app: AppHandle, model_id: String) {
         return;
     };
 
-    if !state.installing.lock().unwrap().insert(model_id.clone()) {
-        return; // already downloading
+    let cancel = Cancel::new();
+    {
+        let mut inflight = state.installing.lock().unwrap();
+        if inflight.contains_key(&model_id) {
+            return; // already downloading
+        }
+        inflight.insert(model_id.clone(), cancel.clone());
     }
     let root = state.models_dir();
+
+    // Asked before the first byte, so a download that cannot possibly finish
+    // does not spend ten minutes proving it.
+    if let Err(space) = install::check_space(&root, m) {
+        state.installing.lock().unwrap().remove(&model_id);
+        let _ = app.emit(
+            "failed",
+            serde_json::json!({
+                "id": m.id,
+                "error": format!(
+                    "{} needs about {} MB of room and there is {} MB free.",
+                    m.label,
+                    space.required_bytes / (1024 * 1024),
+                    space.available_bytes / (1024 * 1024),
+                ),
+                "required_bytes": space.required_bytes,
+                "available_bytes": space.available_bytes,
+            }),
+        );
+        return;
+    }
 
     std::thread::spawn(move || {
         let tray = app.tray_by_id("lector");
@@ -275,7 +305,7 @@ pub fn install_model(app: AppHandle, model_id: String) {
             let _ = t.set_tooltip(Some(s));
         };
 
-        let result = install::install(&root, m, &Cancel::new(), |p| {
+        let result = install::install(&root, m, &cancel, |p| {
             let _ = app.emit(
                 "progress",
                 serde_json::json!({
@@ -307,6 +337,11 @@ pub fn install_model(app: AppHandle, model_id: String) {
             // Selecting it is the point of downloading it.
             Ok(_) => {
                 state.select_voice(&app, &model_id, m.speakers[0].sid);
+                let _ = app.emit("changed", ());
+            }
+            // Cancelling is not a failure and must not be reported as one --
+            // the reader knows, they pressed the button.
+            Err(e) if e == "cancelled" => {
                 let _ = app.emit("changed", ());
             }
             Err(e) => {
@@ -370,6 +405,8 @@ fn main() {
             api::set_speed,
             api::audition,
             api::install,
+            api::cancel_install,
+            api::audition_or_install,
             api::grant_accessibility,
         ])
         .setup(move |app| {
@@ -389,7 +426,7 @@ fn main() {
                 weak: Mutex::new(std::sync::Weak::new()),
                 settings: Mutex::new(settings),
                 data_dir,
-                installing: Mutex::new(HashSet::new()),
+                installing: Mutex::new(HashMap::new()),
             });
             *state.weak.lock().unwrap() = Arc::downgrade(&state);
             app.manage(state.clone());
@@ -496,7 +533,7 @@ fn menu_for(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let voices = Submenu::new(app, "Voice", true)?;
     for m in catalog::CATALOG {
         let installed = state.installed_dir(m).is_some();
-        if installing.contains(m.id) {
+        if installing.contains_key(m.id) {
             voices.append(&MenuItem::with_id(
                 app,
                 format!("busy:{}", m.id),

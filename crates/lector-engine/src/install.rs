@@ -48,12 +48,95 @@ impl Cancel {
     }
 }
 
+/// How much has to arrive before progress is reported again.
+const PROGRESS_BYTES: u64 = 128 * 1024;
+/// And how long has to pass. Both must hold: one alone is wrong at one end of
+/// the connection-speed range or the other.
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(40);
+
 fn part_path(root: &Path, m: &Model) -> PathBuf {
     root.join(format!("{}.part", m.id))
 }
 
 fn tmp_path(root: &Path, m: &Model) -> PathBuf {
     root.join(format!("{}.tmp", m.id))
+}
+
+/// What a download needs against what the disk has.
+///
+/// Structured rather than a formatted string: the window has to compare the
+/// two numbers to decide what to say, and a caller that must parse prose to
+/// find out how short it is will get it wrong the first time the wording
+/// changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Space {
+    pub required_bytes: u64,
+    pub available_bytes: u64,
+}
+
+/// Whether there is room for this model, before the first byte is fetched.
+///
+/// The archive and its unpacked contents both exist at once, plus the `.tmp`
+/// directory the unpack builds before the rename -- so the requirement is
+/// about three times the download, and a check for one times it would still
+/// fill the disk. A disk with no room left is also how a half-written model
+/// happens, which is the failure this exists to avoid.
+pub fn check_space(root: &Path, m: &Model) -> Result<(), Space> {
+    let required_bytes = (m.mb as u64) * 3 * 1024 * 1024;
+    // Walk up to a directory that exists: the models directory is created on
+    // first install, and asking about a path that is not there yet fails.
+    let mut probe = root.to_path_buf();
+    while !probe.exists() {
+        match probe.parent() {
+            Some(p) => probe = p.to_path_buf(),
+            None => return Ok(()), // nothing to ask; let the download decide
+        }
+    }
+    let Some(available_bytes) = available_space(&probe) else {
+        return Ok(()); // cannot tell, so do not stand in the way
+    };
+    if available_bytes >= required_bytes {
+        Ok(())
+    } else {
+        Err(Space {
+            required_bytes,
+            available_bytes,
+        })
+    }
+}
+
+#[cfg(unix)]
+fn available_space(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `c` is a valid NUL-terminated path and `st` is fully written by
+    // statvfs before it is read; both go out of scope here.
+    unsafe {
+        let mut st: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c.as_ptr(), &mut st) != 0 {
+            return None;
+        }
+        // bavail, not bfree: the latter includes blocks reserved for root.
+        Some(st.f_bavail as u64 * st.f_frsize as u64)
+    }
+}
+
+#[cfg(not(unix))]
+fn available_space(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut free: u64 = 0;
+    // SAFETY: `wide` is NUL-terminated and outlives the call; the two null
+    // pointers are documented as optional out-parameters.
+    let ok = unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(free)
 }
 
 pub fn is_installed(root: &Path, m: &Model) -> bool {
@@ -181,9 +264,11 @@ fn download(
     let mut received = if resuming { resume_from } else { 0 };
     let mut reader = resp.into_reader();
     let mut buf = vec![0u8; 64 * 1024];
-    // Emit at roughly 1% granularity; per-chunk events flood the UI.
-    let step = (total / 100).max(256 * 1024);
-    let mut next_report = received + step;
+    // Both conditions, not either: bytes alone floods a fast connection and
+    // time alone starves a slow one, where a bar that has not moved in twenty
+    // seconds is indistinguishable from a hang.
+    let mut reported_at = received;
+    let mut reported_when = std::time::Instant::now();
 
     loop {
         if cancel.is_cancelled() {
@@ -195,8 +280,10 @@ fn download(
         }
         file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
         received += n as u64;
-        if received >= next_report {
-            next_report = received + step;
+        if received - reported_at >= PROGRESS_BYTES && reported_when.elapsed() >= PROGRESS_INTERVAL
+        {
+            reported_at = received;
+            reported_when = std::time::Instant::now();
             on_progress(Progress {
                 received,
                 total,
@@ -277,4 +364,48 @@ fn unpack(archive: &Path, dest: &Path, cancel: &Cancel) -> Result<(), String> {
         entry.unpack(&out).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn a_model() -> Model {
+        *crate::catalog::CATALOG
+            .iter()
+            .find(|m| m.id == crate::catalog::DEFAULT_MODEL)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_disk_with_room_passes() {
+        // The temp directory is on a real filesystem with room for 21 MB.
+        assert_eq!(check_space(&std::env::temp_dir(), &a_model()), Ok(()));
+    }
+
+    #[test]
+    fn a_path_that_does_not_exist_yet_is_checked_against_its_parent() {
+        let deep = std::env::temp_dir().join("lector-no-such-dir/models/and/deeper");
+        assert_eq!(check_space(&deep, &a_model()), Ok(()));
+    }
+
+    #[test]
+    fn the_requirement_allows_for_the_archive_and_its_contents() {
+        // An impossible model: 8 TB, so no real disk passes, and the numbers
+        // come back structured rather than as prose to parse.
+        let mut huge = a_model();
+        huge.mb = 8 * 1024 * 1024;
+        let err = check_space(&std::env::temp_dir(), &huge).unwrap_err();
+        assert_eq!(err.required_bytes, huge.mb as u64 * 3 * 1024 * 1024);
+        assert!(err.available_bytes < err.required_bytes);
+    }
+
+    #[test]
+    fn cancelling_is_visible_to_the_worker() {
+        let c = Cancel::new();
+        assert!(!c.is_cancelled());
+        let copy = c.clone();
+        c.cancel();
+        assert!(copy.is_cancelled(), "a clone must share the flag");
+    }
 }

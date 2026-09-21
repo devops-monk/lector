@@ -32,6 +32,7 @@ fn wrong_hash_model() -> Model {
         url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-amy-medium-int8.tar.bz2",
         sha256: "0000000000000000000000000000000000000000000000000000000000000000",
         speakers: SPEAKERS,
+        recommended: false,
         tradeoff: "",
     }
 }

@@ -78,21 +78,37 @@ html, body {
 
 #models { flex: 1; overflow-y: auto; padding: 0 8px 16px; }
 
-.model { margin-bottom: 4px; }
-
-.model > .head {
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px 8px; border-radius: 8px; cursor: pointer;
-  user-select: none;
+/* Voice cards. The old tree rebuilt 181 rows on every keystroke and gave a
+   downloading model a bare bar; a card can say what it is, what it costs and
+   what it is doing in the same place. */
+.card {
+  margin-bottom: 6px; padding: 9px 10px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--paper);
 }
-.model > .head:hover { background: var(--paper-3); }
-.model .name { font-weight: 600; }
-.model .meta { color: var(--ink-3); font-size: 11px; margin-left: auto; text-align: right; }
-.chev { color: var(--ink-3); width: 10px; transition: transform .12s; font-size: 9px; }
-.model.open .chev { transform: rotate(90deg); }
+.card.active { border-color: var(--accent); background: var(--accent-bg); }
 
-.voices { display: none; padding: 2px 0 6px 18px; }
-.model.open .voices { display: block; }
+.cardhead { margin-bottom: 7px; }
+.cardname { display: flex; align-items: center; gap: 7px; }
+.cardlabel { font-weight: 600; }
+
+/* One recommendation, and it stops being shown the moment the model is in
+   use -- a badge that says RECOMMENDED next to one that says ACTIVE is two
+   answers to a question with one. */
+.badge {
+  font-size: 9px; letter-spacing: .06em; font-weight: 700;
+  padding: 2px 5px; border-radius: 4px;
+  background: var(--paper-3); color: var(--ink-3);
+}
+.badge.on { background: var(--accent); color: #fff; }
+
+.cardtrade { color: var(--ink-2); font-size: 11.5px; margin-top: 3px; line-height: 1.45; }
+
+.cardact { display: flex; align-items: center; gap: 8px; }
+.cardmeta { color: var(--ink-3); font-size: 11px; flex: 1; }
+
+.voices { display: none; padding: 6px 0 0; margin-top: 7px; border-top: 1px solid var(--line); }
+.card.open .voices { display: block; }
 
 .voice {
   display: flex; align-items: center; gap: 8px;
@@ -117,7 +133,7 @@ html, body {
 }
 .get:hover { border-color: var(--accent); color: var(--accent); }
 
-.bar { height: 3px; background: var(--paper-3); border-radius: 2px; margin: 5px 8px 2px; overflow: hidden; }
+.bar { height: 3px; background: var(--paper-3); border-radius: 2px; margin: 0 0 7px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .2s; }
 .phase { font-size: 10px; color: var(--ink-3); margin: 0 8px 4px; }
 

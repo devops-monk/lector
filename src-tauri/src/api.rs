@@ -28,6 +28,8 @@ pub struct ModelInfo {
     pub engine: String,
     pub mb: u32,
     pub tradeoff: String,
+    /// The one model suggested to somebody who has not chosen.
+    pub recommended: bool,
     pub installed: bool,
     pub installing: bool,
     pub speakers: Vec<SpeakerInfo>,
@@ -73,8 +75,9 @@ pub fn snapshot(state: State<Arc<App>>) -> Snapshot {
             engine: format!("{:?}", m.engine),
             mb: m.mb,
             tradeoff: m.tradeoff.to_string(),
+            recommended: m.recommended,
             installed: state.installed_dir(m).is_some(),
-            installing: installing.contains(m.id),
+            installing: installing.contains_key(m.id),
             speakers: m
                 .speakers
                 .iter()
@@ -230,6 +233,41 @@ pub fn audition(app: AppHandle, model_id: String, sid: i32) {
 #[tauri::command]
 pub fn install(app: AppHandle, model_id: String) {
     crate::install_model(app, model_id);
+}
+
+/// Stops a download in flight.
+///
+/// Confirming first is the window's job, and only past halfway: friction should
+/// be proportional to the bytes about to be thrown away.
+#[tauri::command]
+pub fn cancel_install(state: State<Arc<App>>, model_id: String) {
+    if let Some(cancel) = state.installing.lock().unwrap().get(&model_id) {
+        cancel.cancel();
+    }
+}
+
+/// Hears a voice, downloading it first if it is not here yet.
+///
+/// The download *is* the audition. No voice should be committed to unheard,
+/// and with 181 of them the alternative is choosing by name. Pressing this on
+/// a model that is not installed is the same gesture as pressing it on one
+/// that is -- the only difference is how long it takes and that the button
+/// said what it would cost.
+#[tauri::command]
+pub fn audition_or_install(app: AppHandle, model_id: String, sid: i32) {
+    std::thread::spawn(move || {
+        let state = app.state::<Arc<App>>().inner().clone();
+        let Some(m) = catalog::model(&model_id) else {
+            return;
+        };
+        if state.installed_dir(m).is_none() {
+            // install_model selects the voice when it finishes, which is what
+            // somebody who pressed "hear it" on an empty app wanted anyway.
+            crate::install_model(app.clone(), model_id);
+            return;
+        }
+        state.audition(&model_id, sid);
+    });
 }
 
 #[tauri::command]

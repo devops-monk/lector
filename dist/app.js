@@ -88,60 +88,126 @@ function matches(model, sp) {
   return hay.includes(filter);
 }
 
+// The voice picker.
+//
+// Cards, not a tree. Two rules from verba, which learned both the hard way:
+// name the tradeoff rather than the model, because "Noticeably better, a
+// larger download" is a choice and "Kokoro v1.0 349 MB" is a quiz; and make
+// exactly one recommendation, because two recommendations is a list with no
+// recommendation in it. Everything else sorts by size ascending, since
+// somebody ignoring the badge is usually looking for the cheapest download.
+
+function orderedModels() {
+  return [...snap.models].sort((a, b) => {
+    const active = (m) => (m.id === snap.model_id ? 0 : 1);
+    if (active(a) !== active(b)) return active(a) - active(b);
+    if (a.installed !== b.installed) return a.installed ? -1 : 1;
+    if (a.recommended !== b.recommended) return a.recommended ? -1 : 1;
+    return a.mb - b.mb;
+  });
+}
+
 function renderModels() {
   const box = $("models");
   box.innerHTML = "";
 
   let shown = 0;
-  for (const m of snap.models) {
+  for (const m of orderedModels()) {
     const hits = m.speakers.filter((sp) => matches(m, sp));
     if (!matches(m, null) && hits.length === 0) continue;
     shown++;
 
-    const node = el("div", "model");
-    // A search should show what it found, so matching rows open themselves.
-    if (open.has(m.id) || (filter && hits.length)) node.classList.add("open");
+    const active = m.id === snap.model_id;
+    const card = el("div", "card");
+    if (active) card.classList.add("active");
+    if (open.has(m.id) || (filter && hits.length)) card.classList.add("open");
 
-    const head = el("div", "head");
-    head.append(el("span", "chev", "▶"), el("span", "name", m.label));
+    // --- the head: what it is, and one line on what it costs
+    const head = el("div", "cardhead");
+    const name = el("div", "cardname");
+    name.append(el("span", "cardlabel", m.label));
+    if (active) name.append(el("span", "badge on", "ACTIVE"));
+    else if (m.recommended && !m.installed) name.append(el("span", "badge", "RECOMMENDED"));
+    head.append(name);
+    head.append(el("div", "cardtrade", m.tradeoff));
+    card.append(head);
 
+    // --- the action: one button whose verb is the state it is in
+    const act = el("div", "cardact");
     if (m.installing) {
       const p = progress.get(m.id);
-      head.append(el("span", "meta", p?.phase === "Downloading" ? "downloading" : (p?.phase ?? "…").toLowerCase()));
-      node.append(head);
+      const pct = p?.total ? Math.round((p.received / p.total) * 100) : null;
       const bar = el("div", "bar");
       const fill = el("i");
-      if (p?.total) fill.style.width = `${(p.received / p.total) * 100}%`;
+      if (pct !== null) fill.style.width = `${pct}%`;
       bar.append(fill);
-      node.append(bar);
-      if (p?.total) {
-        node.append(el("div", "phase", `${Math.round((p.received / p.total) * 100)}% of ${m.mb} MB`));
-      }
+      card.append(bar);
+
+      const phase = (p?.phase ?? "Downloading").toLowerCase();
+      act.append(
+        el("span", "cardmeta", pct !== null ? `${phase} · ${pct}% of ${m.mb} MB` : phase)
+      );
+      const stop = el("button", "get", "Cancel");
+      stop.onclick = (e) => {
+        e.stopPropagation();
+        // Friction in proportion to what is about to be thrown away: past
+        // halfway, ask; before it, there is little to lose and asking is noise.
+        if (pct !== null && pct > 50 && !confirm(`Discard the ${pct}% of ${m.label} already downloaded?`)) {
+          return;
+        }
+        invoke("cancel_install", { modelId: m.id });
+      };
+      act.append(stop);
     } else if (!m.installed) {
-      head.append(el("span", "meta", `${m.speakers.length > 1 ? m.speakers.length + " voices · " : ""}${m.mb} MB`));
-      const btn = el("button", "get", "Get");
+      act.append(
+        el("span", "cardmeta", m.speakers.length > 1 ? `${m.speakers.length} voices` : m.accent)
+      );
+      // The download is the audition. The cost sits on the button, because
+      // pressing it is a commitment and a commitment states its price.
+      const btn = el("button", "get", `Hear it · ${m.mb} MB`);
       btn.onclick = (e) => {
         e.stopPropagation();
-        invoke("install", { modelId: m.id });
+        invoke("audition_or_install", { modelId: m.id, sid: m.speakers[0].sid });
       };
-      head.append(btn);
-      head.title = m.tradeoff;
-      node.append(head);
+      act.append(btn);
     } else {
-      head.append(el("span", "meta", m.speakers.length > 1 ? `${m.speakers.length} voices` : m.accent));
-      head.onclick = () => {
-        open.has(m.id) ? open.delete(m.id) : open.add(m.id);
-        renderModels();
+      act.append(
+        el("span", "cardmeta", m.speakers.length > 1 ? `${m.speakers.length} voices` : m.accent)
+      );
+      if (m.speakers.length > 1) {
+        const btn = el("button", "get", card.classList.contains("open") ? "Hide voices" : "Voices");
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          open.has(m.id) ? open.delete(m.id) : open.add(m.id);
+          renderModels();
+        };
+        act.append(btn);
+      } else if (!active) {
+        const btn = el("button", "get", "Use");
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          invoke("choose_voice", { modelId: m.id, sid: m.speakers[0].sid });
+        };
+        act.append(btn);
+      }
+      const play = el("button", "play", "▶");
+      play.title = "Hear this voice";
+      play.onclick = (e) => {
+        e.stopPropagation();
+        invoke("audition", { modelId: m.id, sid: snap.speaker && active ? snap.speaker : m.speakers[0].sid });
       };
-      node.append(head);
+      act.append(play);
+    }
+    card.append(act);
 
+    // --- the speakers, for models that have more than one
+    if (m.installed && m.speakers.length > 1) {
       const list = el("div", "voices");
       for (const sp of hits) {
         const row = el("div", "voice");
-        if (m.id === snap.model_id && sp.sid === snap.speaker) row.classList.add("on");
+        if (active && sp.sid === snap.speaker) row.classList.add("on");
         row.append(el("span", null, voiceLabel(m, sp)));
         if (sp.note) row.append(el("span", "note", sp.note));
-
         const play = el("button", "play", "▶");
         play.title = "Hear this voice";
         play.onclick = (e) => {
@@ -149,13 +215,13 @@ function renderModels() {
           invoke("audition", { modelId: m.id, sid: sp.sid });
         };
         row.append(play);
-
         row.onclick = () => invoke("choose_voice", { modelId: m.id, sid: sp.sid });
         list.append(row);
       }
-      node.append(list);
+      card.append(list);
     }
-    box.append(node);
+
+    box.append(card);
   }
 
   if (!shown) box.append(el("div", "empty", "Nothing matches that."));

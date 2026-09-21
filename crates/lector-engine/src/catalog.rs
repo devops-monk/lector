@@ -11,8 +11,6 @@
 
 use crate::voice::Engine;
 
-const TTS_RELEASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models";
-
 /// One selectable speaker within a model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Speaker {
@@ -38,6 +36,12 @@ pub struct Model {
     pub speakers: &'static [Speaker],
     /// What choosing this one costs and buys, for the picker.
     pub tradeoff: &'static str,
+    /// The one model to suggest to somebody who has not chosen.
+    ///
+    /// Exactly one, and the catalog has a test that says so. Two
+    /// recommendations is a list with no recommendation in it, and a picker
+    /// that badges three things has told the reader nothing about any of them.
+    pub recommended: bool,
 }
 
 /// Kokoro's English speakers.
@@ -811,6 +815,7 @@ pub const CATALOG: &[Model] = &[
         sha256: "6fa5be852612ce761094ba74ee6123b4fc4acfefa79bf64dc63acae4a83af2fd",
         speakers: KITTEN,
         tradeoff: "Tiny and quick, with eight voices.",
+        recommended: false,
     },
     Model {
         id: "vits-piper-en_US-amy-medium-int8",
@@ -822,6 +827,7 @@ pub const CATALOG: &[Model] = &[
         sha256: "bd23c0aa629eb3719448582f45ede49e8fa6a679061fed5eab16a6a6fd8e7e82",
         speakers: ONE,
         tradeoff: "Fast and small. Ready in seconds.",
+        recommended: true,
     },
     Model {
         id: "vits-piper-en_US-lessac-medium-int8",
@@ -833,6 +839,7 @@ pub const CATALOG: &[Model] = &[
         sha256: "f1c6d0295cf16087b05f80fdca5b44daca5cd78e2c425d419a42ba34929805f9",
         speakers: ONE,
         tradeoff: "Clear and neutral.",
+        recommended: false,
     },
     Model {
         id: "vits-piper-en_US-ryan-medium-int8",
@@ -844,6 +851,7 @@ pub const CATALOG: &[Model] = &[
         sha256: "376eb489d42e98cb49f0e13a633e8d88580bd247ed8aacc298a733210404f771",
         speakers: ONE,
         tradeoff: "Male, conversational.",
+        recommended: false,
     },
     Model {
         id: "vits-piper-en_US-kathleen-low-int8",
@@ -855,6 +863,7 @@ pub const CATALOG: &[Model] = &[
         sha256: "08a1372ea3eed70b9477401c3aa378a73db1c609eece25fa10203c854cfe044a",
         speakers: ONE,
         tradeoff: "Lowest latency of the set.",
+        recommended: false,
     },
     Model {
         id: "vits-piper-en_GB-alba-medium-int8",
@@ -866,6 +875,7 @@ pub const CATALOG: &[Model] = &[
         sha256: "f7581d123ae977f64f3032bb247d4deeac8440e881d918d36fdd36d8f1030fb7",
         speakers: ONE,
         tradeoff: "Scottish accent.",
+        recommended: false,
     },
     Model {
         id: "vits-piper-en_GB-jenny_dioco-medium-int8",
@@ -877,6 +887,7 @@ pub const CATALOG: &[Model] = &[
         sha256: "db7ed4edd3c1e28b1afdecd9a77f5cb44db326f687632ffd364be513ec6a11e6",
         speakers: ONE,
         tradeoff: "British, expressive.",
+        recommended: false,
     },
     Model {
         id: "vits-piper-en_GB-northern_english_male-medium-int8",
@@ -888,6 +899,7 @@ pub const CATALOG: &[Model] = &[
         sha256: "9b2afdc8f35426f6b2739f255e67841679a52b56d19ece874a1eae208cb88ad1",
         speakers: ONE,
         tradeoff: "Male, northern English.",
+        recommended: false,
     },
     Model {
         id: "vits-piper-en_US-glados",
@@ -899,6 +911,7 @@ pub const CATALOG: &[Model] = &[
         sha256: "fa2b82a4984468081db8cebbaa7c0b1e008492ac2b4276d7f628d6141b6a2d1c",
         speakers: ONE,
         tradeoff: "For fun.",
+        recommended: false,
     },
     Model {
         id: "vits-vctk",
@@ -910,6 +923,7 @@ pub const CATALOG: &[Model] = &[
         sha256: "4f0a02db66914b3760b144cebc004e65dd4d1aeef43379f2b058849e74002490",
         speakers: VCTK,
         tradeoff: "The widest choice of voices, one download.",
+        recommended: false,
     },
     Model {
         id: "kokoro-multi-lang-v1_0",
@@ -921,6 +935,7 @@ pub const CATALOG: &[Model] = &[
         sha256: "c5f7e2d2caf082bc1d20fb70334a61d99d20b484500aad32e7cf84c128ea3298",
         speakers: KOKORO_EN,
         tradeoff: "Noticeably better. A larger download.",
+        recommended: false,
     },
     Model {
         id: "kokoro-multi-lang-v1_1",
@@ -932,6 +947,7 @@ pub const CATALOG: &[Model] = &[
         sha256: "a3f4c73d043860e3fd2e5b06f36795eb81de0fc8e8de6df703245edddd87dbad",
         speakers: KOKORO_EN,
         tradeoff: "Newer Kokoro. Same size, same voices.",
+        recommended: false,
     },
 ];
 
@@ -947,8 +963,68 @@ pub fn model(id: &str) -> Option<&'static Model> {
 /// the app actually speaks in is a fairer sample than a pangram.
 pub const AUDITION: &str = "This is how I sound. Shall I read that for you?";
 
-#[allow(dead_code)]
-fn _catalog_is_consistent() {
-    // Compile-time-ish guard: every entry's URL must live on the release we pin.
-    debug_assert!(CATALOG.iter().all(|m| m.url.starts_with(TTS_RELEASE)));
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The one release every model comes from. Pinned rather than tracked: a
+    /// catalog whose URLs can drift is a catalog that can serve a different
+    /// binary tomorrow, which for an app that claims nothing leaves the
+    /// machine would be the one phone-home.
+    const TTS_RELEASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models";
+
+    #[test]
+    fn every_url_lives_on_the_release_we_pin() {
+        for m in CATALOG {
+            assert!(m.url.starts_with(TTS_RELEASE), "{} points elsewhere", m.id);
+        }
+    }
+
+    #[test]
+    fn exactly_one_model_is_recommended() {
+        let n = CATALOG.iter().filter(|m| m.recommended).count();
+        assert_eq!(n, 1, "two recommendations is a list with no recommendation");
+    }
+
+    #[test]
+    fn the_recommendation_is_the_default() {
+        // Otherwise the app starts on one voice and suggests another, which
+        // reads as the app disagreeing with itself.
+        let rec = CATALOG.iter().find(|m| m.recommended).unwrap();
+        assert_eq!(rec.id, DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn ids_and_checksums_are_unique() {
+        for (i, m) in CATALOG.iter().enumerate() {
+            for other in &CATALOG[i + 1..] {
+                assert_ne!(m.id, other.id, "duplicate id {}", m.id);
+                assert_ne!(
+                    m.sha256, other.sha256,
+                    "{} and {} claim the same checksum",
+                    m.id, other.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_model_says_what_it_costs() {
+        for m in CATALOG {
+            assert!(!m.tradeoff.is_empty(), "{} has no tradeoff line", m.id);
+            assert!(m.mb > 0, "{} has no size", m.id);
+            assert!(!m.speakers.is_empty(), "{} has no speakers", m.id);
+        }
+    }
+
+    #[test]
+    fn speaker_ids_are_unique_within_a_model() {
+        for m in CATALOG {
+            let mut seen: Vec<i32> = m.speakers.iter().map(|s| s.sid).collect();
+            let before = seen.len();
+            seen.sort_unstable();
+            seen.dedup();
+            assert_eq!(before, seen.len(), "{} repeats a speaker id", m.id);
+        }
+    }
 }
