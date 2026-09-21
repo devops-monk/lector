@@ -68,10 +68,9 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/sherpa-cache
         with:
           key: ${{ matrix.slug }}
-          cache-directories: target/sherpa-onnx-prebuilt
 
       # Tauri's webview and tray, plus the two things Lector itself needs on
       # Linux: libxdo for synthesizing the copy keystroke, and ALSA for cpal.

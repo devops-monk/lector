@@ -1,0 +1,43 @@
+name: Cache sherpa-onnx prebuilt libraries
+description: >
+  Restores the Rust cache and makes sure the sherpa-onnx static libraries
+  inside it actually survived.
+
+inputs:
+  key:
+    description: Extra cache key, for matrix jobs that must not share a cache.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ inputs.key }}
+        cache-directories: target/sherpa-onnx-prebuilt
+
+    # sherpa-onnx-sys caches its prebuilt static libraries under
+    # target/sherpa-onnx-prebuilt, and its build script short-circuits on the
+    # *directory* existing without checking that the libraries are still in
+    # it. A restored cache that kept the directory but not its contents
+    # therefore reports success, emits a link-search path pointing at nothing,
+    # and rustc fails three steps later with "could not find native static
+    # library sherpa-onnx-c-api" -- an error that names neither the cache nor
+    # the build script.
+    #
+    # Far cheaper to check than to debug: if the libraries did not survive,
+    # drop the directory and let the build script fetch them again. That costs
+    # one 25 MB download on the rare run where it fires.
+    - name: Validate the sherpa-onnx cache
+      shell: bash
+      run: |
+        dir=target/sherpa-onnx-prebuilt
+        [ -d "$dir" ] || { echo "nothing cached yet"; exit 0; }
+        if find "$dir" \( -name 'libsherpa-onnx-c-api.a' -o -name 'sherpa-onnx-c-api.lib' \) \
+             | grep -q .; then
+          echo "cache is complete"
+        else
+          echo "cache kept the directory but not the libraries; removing it"
+          rm -rf "$dir"
+        fi

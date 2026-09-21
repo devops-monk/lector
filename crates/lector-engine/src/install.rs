@@ -121,7 +121,7 @@ fn available_space(path: &Path) -> Option<u64> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn available_space(path: &Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -137,6 +137,15 @@ fn available_space(path: &Path) -> Option<u64> {
         )
     };
     (ok != 0).then_some(free)
+}
+
+/// Anywhere else, decline to answer rather than guess.
+///
+/// `check_space` treats `None` as "cannot tell, do not stand in the way", so a
+/// target with no implementation loses the check and nothing else.
+#[cfg(not(any(unix, windows)))]
+fn available_space(_path: &Path) -> Option<u64> {
+    None
 }
 
 pub fn is_installed(root: &Path, m: &Model) -> bool {
