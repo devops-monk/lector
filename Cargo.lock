@@ -2309,7 +2309,7 @@ dependencies = [
 
 [[package]]
 name = "lector"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arboard",
  "core-graphics 0.24.0",
@@ -2331,7 +2331,7 @@ dependencies = [
 
 [[package]]
 name = "lector-book"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "lector-text",
  "pdf-extract",
@@ -2345,7 +2345,7 @@ dependencies = [
 
 [[package]]
 name = "lector-engine"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bzip2 0.6.1",
  "cpal",
@@ -2364,7 +2364,7 @@ dependencies = [
 
 [[package]]
 name = "lector-text"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "icu_segmenter",
 ]
