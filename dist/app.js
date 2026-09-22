@@ -781,12 +781,21 @@ listen("failed", (e) => {
   $("warn").classList.add("show");
 });
 
-// Speaking state is polled rather than pushed: it changes far faster than
-// anything worth an event, and the window is often not visible.
+// State that changes without telling us is polled rather than pushed: it
+// changes far faster than anything worth an event, and the window is often not
+// visible.
+//
+// Everything the poll is allowed to notice has to be named here. Accessibility
+// was not, so granting the permission left the banner asking for it until
+// something unrelated happened to redraw -- the permission was live, the
+// window simply never looked again. macOS grants it in System Settings, with
+// no event of any kind, which makes polling the only way to find out.
+const WATCHED = ["speaking", "ready", "paused", "accessibility"];
+
 setInterval(async () => {
   if (document.hidden || advancing) return;
   const s = await invoke("snapshot");
-  if (s.speaking !== snap?.speaking || s.ready !== snap?.ready) {
+  if (!snap || WATCHED.some((k) => s[k] !== snap[k])) {
     snap = s;
     render();
   }
