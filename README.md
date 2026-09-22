@@ -264,7 +264,7 @@ Lector*) needs no Accessibility permission at all and works regardless.
 ### Exercising the pieces
 
 ```sh
-cargo test --workspace                      # 114 tests
+cargo test --workspace                      # 121 tests
 cargo test --workspace -- --ignored         # + real model downloads
 
 cargo run -p lector-text --example demo     # see how text is chunked
