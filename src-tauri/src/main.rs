@@ -55,6 +55,9 @@ pub struct App {
     /// Which book and chapter is being read, if any. Decides whether the
     /// position callback writes to the library or to the bookmark.
     pub open: Mutex<Option<Open>>,
+    /// The chunk currently being heard, kept so a change that invalidates the
+    /// reading in flight can pick it up again from the right place.
+    pub position: std::sync::atomic::AtomicUsize,
     settings: Mutex<Settings>,
     data_dir: PathBuf,
     /// Set once, immediately after construction, so callbacks can reach back
@@ -174,6 +177,9 @@ impl App {
                 let state = self.clone_for_callback();
                 match Lector::with_voice_and_position(voice, move |p| {
                     if let Some(state) = state.upgrade() {
+                        state
+                            .position
+                            .store(p.index, std::sync::atomic::Ordering::Release);
                         // One position, two places it can belong. A book keeps
                         // its own, beside the book; anything else is the
                         // bookmark for pasted text.
@@ -215,7 +221,37 @@ impl App {
         if let Some(l) = self.lector.lock().unwrap().as_mut() {
             l.set_speed(speed);
         }
+        self.reissue();
         rebuild_menu(app);
+    }
+
+    /// Picks the current reading up again at the chunk being heard.
+    ///
+    /// Speed and voice are properties of a synthesis job, not of the engine:
+    /// changing either leaves whatever is already in flight exactly as it was,
+    /// so a slider moved mid-chapter appeared to do nothing until the next one.
+    /// Re-issuing is also required rather than merely nice -- every mark
+    /// records a frame offset, and audio generated at a different speed makes
+    /// all of them wrong, so the highlight would drift for the rest of the
+    /// chapter.
+    ///
+    /// The current chunk restarts from its beginning. That is audible, and it
+    /// is the honest cost: the alternative is resynthesizing from the middle
+    /// of a sentence, which no model does.
+    fn reissue(&self) {
+        let doc = self.doc.lock().unwrap().clone();
+        let Some(doc) = doc else { return };
+        let guard = self.lector.lock().unwrap();
+        let Some(l) = guard.as_ref() else { return };
+        // Paused is deliberately left alone: re-reading would start the voice
+        // again, and nothing that adjusts a setting should begin speaking.
+        if !l.is_speaking() || l.is_paused() {
+            return;
+        }
+        let at = self.position.load(std::sync::atomic::Ordering::Acquire);
+        if at < doc.len() {
+            l.read(doc, at);
+        }
     }
 
     /// Speaks a sample in a voice without selecting it.
@@ -254,6 +290,9 @@ impl App {
             s.save(&self.data_dir);
         }
         self.load_engine();
+        // A different voice invalidates the reading in flight for the same
+        // reason a different speed does.
+        self.reissue();
         rebuild_menu(app);
     }
 }
@@ -423,6 +462,7 @@ fn main() {
                 bookmark: Bookmark::load(&data_dir),
                 library: Library::new(&data_dir),
                 open: Mutex::new(None),
+                position: std::sync::atomic::AtomicUsize::new(0),
                 weak: Mutex::new(std::sync::Weak::new()),
                 settings: Mutex::new(settings),
                 data_dir,
